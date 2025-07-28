@@ -1,0 +1,13 @@
+# Backend Dependencies (FastAPI)
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+openai>=1.3.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+python-dotenv>=1.0.0
+
+# Frontend Dependencies (Streamlit)
+streamlit>=1.28.0
+pandas>=2.1.0
+openpyxl>=3.1.0

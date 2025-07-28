@@ -229,7 +229,7 @@ exports/
 # Machine learning models
 *.pkl
 *.model
-models/
+
 
 # Documentation builds
 docs/_build/

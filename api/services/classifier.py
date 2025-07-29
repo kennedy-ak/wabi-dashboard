@@ -8,7 +8,7 @@ from datetime import datetime
 
 from config import settings
 from api.models import CategoryResult, BatchResult
-from api.utils.constants import CATEGORY_CLASSIFICATION_PROMPT
+from api.utils.constants import CATEGORY_CLASSIFICATION_PROMPT, CATEGORY_CLASSIFICATION_PROMPT_TEXT_BASED
 from api.utils.scraper import PoliteScraper
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class FurnitureCategoryClassifier:
                 # Extract relevant text fields
                 text_fields = []
                 for key, value in item.items():
-                    if key not in ["Product URL", "product"] and value:
+                    if key not in ["Product Name", "Tags"] and value:
                         text_fields.append(f"{key}: {value}")
                 furniture_descriptions.append(" | ".join(text_fields))
 
@@ -117,6 +117,7 @@ class FurnitureCategoryClassifier:
                 # Scrape image using polite scraper
                 logger.info(f"Scraping image for item {i+1}: {product_url}")
                 image_url = await self.scraper.scrape_images_safely(product_url)
+
 
                 if not image_url:
                     logger.warning(f"Image scraping failed for item {i+1}, attempting text-based fallback")

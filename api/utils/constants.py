@@ -81,3 +81,133 @@ Respond in JSON format:
     "reasoning": "..."
 }
 """
+
+CATEGORY_CLASSIFICATION_PROMPT_TEXT_BASED ="""
+**Furniture Category Classification System**
+
+**Task**: Analyze furniture product details and return a structured JSON prediction of its category, style, and placement using the following rules.
+
+**Input Requirements**:
+- `product_name` (string)
+- `tags` (comma-separated string)
+- `style` (string, optional)
+- `suggested_placement` (string, optional)
+
+**Processing Rules**:
+
+1. **Category Prediction** (Priority: Name > Tags):
+   - SOFA: Contains "sofa"/"couch"/"sectional" + tags like "upholstered"/"L-shaped"
+   - CHAIR: Contains "chair"/"armchair" + tags like "velvet"/"swivel"
+   - BED: Contains "bed"/"headboard" + tags like "platform"/"floating"
+   - TABLE: Contains "table"/"desk" + tags like "dining"/"pedestal"
+   - NIGHTSTAND: Contains "nightstand"/"bedside" + tags like "drawer"/"storage"
+   - STOOL: Contains "stool" + tags like "accent"/"footrest"
+
+2. **Style Extraction**:
+   - Split `style` by "/" or ","
+   - First term → `primary_style`
+   - Second term → `secondary_style` (if exists)
+   - Style tags: Filter tags related to aesthetics (e.g., "minimalist", "boucle")
+
+3. **Placement Tags**:
+   - Split `suggested_placement` by "/" or ","
+   - Convert to lowercase (e.g., "Living Room" → "living room")
+   - Remove generic terms ("general", "multipurpose")
+
+4. **Confidence Scoring**:
+   - 0.9-1.0: Exact name/tag match
+   - 0.7-0.89: Name matches but tags ambiguous
+   - 0.5-0.69: Partial match only
+   - <0.5: Flag for review
+
+**Output Format**:
+```json
+{
+    "product_name": "string",
+    "category": "SOFA/CHAIR/BED/etc.",
+    "primary_style": "string|null",
+    "secondary_style": "string|null",
+    "style_tags": ["string"],
+    "placement_tags": ["string"],
+    "confidence": float,
+    "reasoning": "string"
+}
+Examples:
+
+Input:
+
+product_name: "Joss & Main Fleetwood 100''  SOFA"
+
+tags: "large size, minimalist, neutral palette"
+
+style: "Modern"
+
+suggested_placement: "Living Room"
+
+Output:
+
+json
+{
+    "product_name": "Joss & Main Fleetwood 100'' Sofa",
+    "category": "SOFA",
+    "primary_style": "Modern",
+    "secondary_style": null,
+    "style_tags": ["minimalist"],
+    "placement_tags": ["living room"],
+    "confidence": 0.98,
+    "reasoning": "Product name contains 'sofa' and tags ('large size') support SOFA classification. Style is explicitly Modern."
+}
+Input (Ambiguous Case):
+
+product_name: "Storage Bench"
+
+tags: "bench, cabinet, drawers"
+
+style: "Japandi"
+
+suggested_placement: "Bedroom"
+
+Output:
+
+json
+{
+    "product_name": "Storage Bench",
+    "category": "BENCH",
+    "primary_style": "Japandi",
+    "secondary_style": null,
+    "style_tags": [],
+    "placement_tags": ["bedroom"],
+    "confidence": 0.75,
+    "reasoning": "Name contains 'bench' but tags suggest storage functionality. Defaulting to BENCH as primary category."
+}
+Edge Case Handling:
+
+Conflicting terms: "Sofa Table" → Prefer TABLE if tags include "dining"/"coffee"
+
+Missing data: Null values for optional fields
+
+Low confidence: Flag in reasoning (e.g., "Low confidence due to ambiguous tags")
+
+Required Compliance:
+
+Always validate against allowed categories: ["SOFA", "CHAIR", "BED", "TABLE", "NIGHTSTAND", "STOOL", "STORAGE", "DESK", "BENCH", "OTTOMAN", "LIGHTING", "DECOR", "OTHER"]
+
+Never invent new categories
+
+Arrays must contain at least one item or be empty []
+
+text
+
+### Key Features:
+1. **Rule-Based Clarity**: Explicit priority (name > tags) minimizes ambiguity.
+2. **Style/Placement Processing**: Handles split terms and normalization.
+3. **Confidence Scoring**: Transparent metrics for reliability.
+4. **Error Resilience**: Edge cases are flagged in reasoning.
+5. **Structured Output**: Matches your exact JSON schema.
+
+To implement:
+1. Parse input fields.
+2. Apply rules sequentially (name → tags → style/placement).
+3. Calculate confidence based on rule matches.
+4. Return the JSON with explanations.
+"""

@@ -73,7 +73,7 @@ class PoliteScraper:
 class ImageClassifier:
     def __init__(self):
         self.scraper = PoliteScraper()
-        self.model = ChatOpenAI(model="gpt-4o", temperature=0)
+        self.model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
     @staticmethod
     def _create_error_result(item, index, error_message):

@@ -4,8 +4,7 @@ from typing import Dict, Any
 from dotenv import load_dotenv
 import asyncio
 from langsmith.utils import LangSmithNotFoundError
-
-from api.services.classifier import FurnitureCategoryClassifier
+from api.services.text_classifier import TextBasedFurnitureClassifier
 
 # Load environment variables from .env file
 load_dotenv()
@@ -68,7 +67,7 @@ except Exception as e:
     raise
 
 
-classifier = FurnitureCategoryClassifier()  # Create instance once globally
+classifier = TextBasedFurnitureClassifier()  # Create instance once globally
 
 def target_function(inputs: Dict[str, Any]) -> Dict[str, Any]:
     """

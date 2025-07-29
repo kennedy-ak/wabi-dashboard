@@ -40,7 +40,7 @@ class FurnitureCategoryClassifier:
 
             # Call OpenAI API
             response = self.client.chat.completions.create(
-                model="gpt-4.1-mini",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": CATEGORY_CLASSIFICATION_PROMPT},
                     {"role": "user", "content": f"Classify these furniture items into categories:\n{batch_prompt}"}
@@ -139,7 +139,7 @@ class FurnitureCategoryClassifier:
                 # Use OpenAI Vision API for classification
                 try:
                     response = self.client.chat.completions.create(
-                        model="gpt-4.1-mini",
+                        model="gpt-4.o-mini",
                         messages=[
                             {
                                 "role": "user",

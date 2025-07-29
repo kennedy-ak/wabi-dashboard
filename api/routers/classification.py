@@ -8,13 +8,12 @@ from datetime import datetime
 
 from api.models import CategoryClassificationRequest, BatchResult
 from api.services import FurnitureCategoryClassifier
+from api.services.text_classifier import TextBasedFurnitureClassifier
+from api.services.image_classifier import ImageClassifier
 from config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# Initialize classifier
-classifier = FurnitureCategoryClassifier()
 
 async def generate_classification_stream(data: List[Dict[str, Any]], toggle: int):
     """Generate streaming response for furniture category classification"""
@@ -33,8 +32,10 @@ async def generate_classification_stream(data: List[Dict[str, Any]], toggle: int
         try:
             if toggle == 1:
                 # Text classification
+                classifier = TextBasedFurnitureClassifier()
                 result = await classifier.classify_text_batch(batch_data, batch_id)
             else:
+                classifier = ImageClassifier()
                 # Image classification with polite scraping
                 result = await classifier.classify_image_batch(batch_data, batch_id)
 

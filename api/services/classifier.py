@@ -1,4 +1,5 @@
-import openai
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 import asyncio
 import json
 import logging
@@ -6,7 +7,8 @@ import base64
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from ..utils import CATEGORY_CLASSIFICATION_PROMPT, PoliteScraper
+from ..utils import CATEGORY_CLASSIFICATION_PROMPT
+from ..utils.scraper import PoliteScraper
 from ..models import CategoryResult, BatchResult
 from config import settings
 
@@ -14,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class FurnitureCategoryClassifier:
     def __init__(self):
-        self.client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
         self.scraper = PoliteScraper()
 
     async def classify_text_batch(self, batch_data: List[Dict[str, Any]], batch_id: int) -> BatchResult:
@@ -37,19 +39,14 @@ class FurnitureCategoryClassifier:
             for i, desc in enumerate(furniture_descriptions):
                 batch_prompt += f"{i+1}. {desc}\n"
 
-            # Call OpenAI API
-            response = self.client.chat.completions.create(
-                model="gpt-4.1-mini",
-                messages=[
-                    {"role": "system", "content": CATEGORY_CLASSIFICATION_PROMPT},
-                    {"role": "user", "content": f"Classify these furniture items into categories:\n{batch_prompt}"}
-                ],
-                temperature=0.3,
-                max_tokens=2000
-            )
+            # Call OpenAI API via langchain
+            messages = [
+                HumanMessage(content=f"{CATEGORY_CLASSIFICATION_PROMPT}\n\nClassify these furniture items into categories:\n{batch_prompt}")
+            ]
+            response = self.client.invoke(messages)
 
             # Parse response
-            classification_text = response.choices[0].message.content
+            classification_text = response.content
             
             # Try to extract JSON from response
             results = []
@@ -118,47 +115,29 @@ class FurnitureCategoryClassifier:
                 image_url = await self.scraper.scrape_images_safely(product_url)
                 
                 if not image_url:
-                    logger.warning(f"Image scraping failed for item {i+1}, attempting text-based fallback")
-                    # Fallback to text-based classification if available
-                    fallback_result = await self._try_text_fallback(item, i)
-                    results.append(fallback_result)
+                    logger.warning(f"Image scraping failed for item {i+1}")
+                    results.append(self._create_error_result(item, i, "No valid images found on product page"))
                     continue
                 
                 # Download and encode the image
                 image_data = await self._download_and_encode_image(image_url)
                 
                 if not image_data:
-                    logger.warning(f"Image download failed for item {i+1}, attempting text-based fallback")
-                    # Fallback to text-based classification if available
-                    fallback_result = await self._try_text_fallback(item, i)
-                    results.append(fallback_result)
+                    logger.warning(f"Image download failed for item {i+1}")
+                    results.append(self._create_error_result(item, i, "Failed to download or encode image"))
                     continue
                 
-                # Use OpenAI Vision API for classification
+                # Use OpenAI Vision API for classification via langchain
                 try:
-                    response = self.client.chat.completions.create(
-                        model="gpt-4.1-mini",
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": f"{CATEGORY_CLASSIFICATION_PROMPT}\n\nAnalyze this furniture image and classify its category:"
-                                    },
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:image/jpeg;base64,{image_data}"
-                                        }
-                                    }
-                                ]
-                            }
-                        ],
-                        max_tokens=500
+                    message = HumanMessage(
+                        content=[
+                            {"type": "text", "text": f"{CATEGORY_CLASSIFICATION_PROMPT}\n\nAnalyze this furniture image and classify its category:"},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
+                        ]
                     )
                     
-                    classification_text = response.choices[0].message.content
+                    response = self.client.invoke([message])
+                    classification_text = response.content
                     
                     # Try to parse JSON response
                     try:
@@ -300,54 +279,3 @@ class FurnitureCategoryClassifier:
             reasoning=error_msg
         )
 
-    async def _try_text_fallback(self, item: Dict[str, Any], index: int) -> CategoryResult:
-        """Attempt text-based classification when image scraping fails"""
-        try:
-            # Extract text data from the item
-            text_fields = []
-            for key, value in item.items():
-                if key not in ["Product URL", "product"] and value and isinstance(value, str):
-                    text_fields.append(f"{key}: {value}")
-            
-            if not text_fields:
-                return self._create_error_result(item, index, "No text data available for fallback classification")
-            
-            description = " | ".join(text_fields)
-            logger.info(f"Attempting text-based fallback classification for item {index + 1}")
-            
-            # Use simplified prompt for single item
-            fallback_prompt = f"{CATEGORY_CLASSIFICATION_PROMPT}\n\nClassify this furniture item:\n{description}"
-            
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": CATEGORY_CLASSIFICATION_PROMPT},
-                    {"role": "user", "content": fallback_prompt}
-                ],
-                temperature=0.3,
-                max_tokens=500
-            )
-            
-            classification_text = response.choices[0].message.content
-            
-            # Try to parse JSON response
-            try:
-                if '{' in classification_text:
-                    json_start = classification_text.find('{')
-                    json_end = classification_text.rfind('}') + 1
-                    json_str = classification_text[json_start:json_end]
-                    result_data = json.loads(json_str)
-                    result = self._create_category_result(result_data, item, index)
-                    result.reasoning = f"Text-based fallback: {result.reasoning}"
-                    return result
-                else:
-                    raise json.JSONDecodeError("No JSON found", "", 0)
-            except json.JSONDecodeError:
-                # Create basic fallback result
-                result = self._create_fallback_result(item, index)
-                result.reasoning = "Text-based fallback: Could not parse AI response"
-                return result
-                
-        except Exception as e:
-            logger.error(f"Text fallback failed for item {index + 1}: {str(e)}")
-            return self._create_error_result(item, index, f"Both image and text classification failed: {str(e)}")

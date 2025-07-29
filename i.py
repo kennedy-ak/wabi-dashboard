@@ -212,9 +212,23 @@ class PoliteScraper:
 
         return None
 
+class ImageClassifier:
+    def __init__(self):
+        self.scraper = PoliteScraper()
+        self.model = ChatOpenAI(model="gpt-4o", temperature=0)
+
+    @staticmethod
+    def _create_error_result(item, index, error_message):
+        return {
+            "index": index,
+            "product_url": item.get("Product URL", item.get("product", "")),
+            "error": error_message,
+            "success": False
+        }
+
     def scrape_images(self, url):
         """Scrape all image URLs from a webpage"""
-        html = self.make_request(url)
+        html = self.scraper.make_request(url)
         if not html:
             return []
 
@@ -251,25 +265,6 @@ class PoliteScraper:
         if filtered_urls:
             return max(filtered_urls, key=len)
         return None
-
-    async def scrape_images_safely(self, url):
-        """Async wrapper for scrape_images to maintain compatibility"""
-        return self.scrape_images(url)
-
-
-class ImageClassifier:
-    def __init__(self):
-        self.scraper = PoliteScraper()
-        self.model = ChatOpenAI(model="gpt-4o", temperature=0)
-
-    @staticmethod
-    def _create_error_result(item, index, error_message):
-        return {
-            "index": index,
-            "product_url": item.get("Product URL", item.get("product", "")),
-            "error": error_message,
-            "success": False
-        }
 
     def classify_image(self, image_url):
         """Classify a single image using GPT-4 vision with robust error handling"""
@@ -317,7 +312,7 @@ class ImageClassifier:
 
             print(f"\nProcessing product {index+1}: {product_url}")
 
-            image_url = self.scraper.scrape_images(product_url)
+            image_url = self.scrape_images(product_url)
             if not image_url:
                 return self._create_error_result({"product_url": product_url}, index, "No valid images found")
 
@@ -394,7 +389,7 @@ class ImageClassifier:
                 if consecutive_failures > 0:
                     failure_penalty = min(consecutive_failures * 10, 60)
                     base_delay += failure_penalty
-                    print(f"⚠️ Adding {failure_penalty:.1f}s penalty for {consecutive_failures} failures")
+                    print(f"🐌 Adding {failure_penalty:.1f}s penalty for {consecutive_failures} failures")
                 
                 # Add processing time consideration
                 if item_duration > 30:  # If last item took a long time
@@ -419,3 +414,15 @@ class ImageClassifier:
             "processing_time": total_duration,
             "success_rate": success_rate
         }
+
+# Example usage
+if __name__ == "__main__":
+    classifier = ImageClassifier()
+
+    test_batch = [
+        {"Product URL": "https://www.wayfair.com/furniture/pdp/george-oliver-winfree-2-piece-787-upholstered-sofa-w100055074.html"},
+        {"product": "https://www.ikea.com/us/en/p/product-page"}
+    ]
+
+    batch_result = asyncio.run(classifier.classify_image_batch(test_batch, 1))
+    print(json.dumps(batch_result, indent=2))

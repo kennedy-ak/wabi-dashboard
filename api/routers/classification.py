@@ -7,37 +7,39 @@ import logging
 from datetime import datetime
 
 from api.models import CategoryClassificationRequest, BatchResult
-from api.services import FurnitureCategoryClassifier
-from api.services.text_classifier import TextBasedFurnitureClassifier
 from api.services.image_classifier import ImageClassifier
+from api.services.text_classifier import TextBasedFurnitureClassifier
+
 from config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-async def generate_classification_stream(data: List[Dict[str, Any]], toggle: int):
+# Initialize classifiers outside the function
+text_classifier = TextBasedFurnitureClassifier()
+image_classifier = ImageClassifier()
+
+async def generate_classification_stream(data: List[Dict[str, Any]], toggle: int, request_id: str):
     """Generate streaming response for furniture category classification"""
     batch_size = settings.TEXT_BATCH_SIZE if toggle == 1 else settings.IMAGE_BATCH_SIZE
     total_items = len(data)
 
-    logger.info(f"Processing {total_items} furniture items with toggle={toggle}, batch_size={batch_size}")
+    logger.info(f"Request ID: {request_id} - Processing {total_items} furniture items with toggle={toggle}, batch_size={batch_size}")
 
     # Process in batches
     for i in range(0, total_items, batch_size):
         batch_data = data[i:i + batch_size]
         batch_id = i // batch_size + 1
 
-        logger.info(f"Processing furniture batch {batch_id} with {len(batch_data)} items")
+        logger.info(f"Request ID: {request_id} - Processing furniture batch {batch_id} with {len(batch_data)} items")
 
         try:
             if toggle == 1:
                 # Text classification
-                classifier = TextBasedFurnitureClassifier()
-                result = await classifier.classify_text_batch(batch_data, batch_id)
+                result = await text_classifier.classify_text_batch(batch_data, batch_id)
             else:
-                classifier = ImageClassifier()
                 # Image classification with polite scraping
-                result = await classifier.classify_image_batch(batch_data, batch_id)
+                result = await image_classifier.classify_image_batch(batch_data, batch_id)
 
             # Yield result as JSON
             yield f"data: {json.dumps(result.model_dump())}\n\n"
@@ -45,8 +47,18 @@ async def generate_classification_stream(data: List[Dict[str, Any]], toggle: int
             # Small delay to prevent overwhelming
             await asyncio.sleep(0.1)
 
+        except asyncio.TimeoutError as e:
+            logger.error(f"Request ID: {request_id} - Timeout error processing furniture batch {batch_id}: {str(e)}")
+            error_result = BatchResult(
+                batch_id=batch_id,
+                results=[],
+                timestamp=datetime.now().isoformat(),
+                processing_type="error",
+                error="TimeoutError: Image classification took too long"
+            )
+            yield f"data: {json.dumps(error_result.model_dump())}\n\n"
         except Exception as e:
-            logger.error(f"Error processing furniture batch {batch_id}: {str(e)}")
+            logger.error(f"Request ID: {request_id} - Error processing furniture batch {batch_id}: {str(e)}")
             error_result = BatchResult(
                 batch_id=batch_id,
                 results=[],
@@ -71,6 +83,8 @@ async def classify_furniture_category(request: CategoryClassificationRequest):
     """
     Classify furniture categories based on text or image data
     """
+    request_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+
     try:
         # Validate request
         if not request.data:
@@ -85,10 +99,10 @@ async def classify_furniture_category(request: CategoryClassificationRequest):
                 if request.product_column not in item:
                     raise HTTPException(status_code=400, detail=f"Product column '{request.product_column}' not found in data")
 
-        logger.info(f"Starting furniture category classification for {len(request.data)} items, toggle={request.toggle}")
+        logger.info(f"Request ID: {request_id} - Starting furniture category classification for {len(request.data)} items, toggle={request.toggle}")
 
         return StreamingResponse(
-            generate_classification_stream(request.data, request.toggle),
+            generate_classification_stream(request.data, request.toggle, request_id),
             media_type="text/plain",
             headers={
                 "Cache-Control": "no-cache",
@@ -100,5 +114,5 @@ async def classify_furniture_category(request: CategoryClassificationRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error in classify_furniture_category: {str(e)}")
+        logger.error(f"Request ID: {request_id} - Unexpected error in classify_furniture_category: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

@@ -11,8 +11,14 @@ from fake_useragent import UserAgent
 from typing import List, Dict, Any
 import json
 import asyncio
+import logging
+from datetime import datetime
+
+from api.models import CategoryResult, BatchResult
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 class PoliteScraper:
     def __init__(self):
@@ -44,12 +50,12 @@ class PoliteScraper:
 
         if elapsed < delay:
             wait_time = delay - elapsed
-            print(f"Waiting {wait_time:.1f} seconds to avoid rate limiting...")
+            logger.info(f"Waiting {wait_time:.1f} seconds to avoid rate limiting...")
             time.sleep(wait_time)
 
         try:
             headers = self.get_headers()
-            print(f"Making request #{self.request_count + 1} with User-Agent: {headers['User-Agent']}")
+            logger.info(f"Making request #{self.request_count + 1} with User-Agent: {headers['User-Agent']}")
 
             response = self.session.get(url, headers=headers, timeout=10)
             response.raise_for_status()
@@ -63,9 +69,9 @@ class PoliteScraper:
             return response.text
 
         except requests.exceptions.RequestException as e:
-            print(f"Request failed: {e}")
+            logger.error(f"Request failed: {e}")
             if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 429:
-                print("Hit rate limit! Waiting longer...")
+                logger.warning("Hit rate limit! Waiting longer...")
                 time.sleep(random.uniform(30, 60))
                 return self.make_request(url)
             return None
@@ -75,14 +81,54 @@ class ImageClassifier:
         self.scraper = PoliteScraper()
         self.model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-    @staticmethod
-    def _create_error_result(item, index, error_message):
-        return {
-            "index": index,
-            "product_url": item.get("Product URL", item.get("product", "")),
-            "error": error_message,
-            "success": False
-        }
+    def _create_category_result(self, result_data: Dict[str, Any], original_item: Dict[str, Any], index: int) -> CategoryResult:
+        """Create category classification result from parsed data"""
+        # Extract product name
+        product_name = (
+            result_data.get('product_name') or
+            original_item.get('Product Name') or
+            original_item.get('product_name') or
+            f"Furniture Item {index + 1}"
+        )
+
+        # Extract style tags and placement tags, ensuring they're lists
+        style_tags = result_data.get('style_tags', [])
+        if isinstance(style_tags, str):
+            style_tags = [style_tags]
+
+        placement_tags = result_data.get('placement_tags', [])
+        if isinstance(placement_tags, str):
+            placement_tags = [placement_tags]
+
+        return CategoryResult(
+            product_name=product_name,
+            category=result_data.get('category', 'OTHER'),
+            primary_style=result_data.get('primary_style'),
+            secondary_style=result_data.get('secondary_style'),
+            style_tags=style_tags,
+            placement_tags=placement_tags,
+            confidence=float(result_data.get('confidence', 0.5)),
+            reasoning=result_data.get('reasoning', 'Category classification completed')
+        )
+
+    def _create_error_result(self, item: Dict[str, Any], index: int, error_message: str) -> CategoryResult:
+        """Create error result"""
+        product_name = (
+            item.get('Product Name') or
+            item.get('product_name') or
+            f"Furniture Item {index + 1}"
+        )
+
+        return CategoryResult(
+            product_name=product_name,
+            category="ERROR",
+            primary_style=None,
+            secondary_style=None,
+            style_tags=[],
+            placement_tags=[],
+            confidence=0.0,
+            reasoning=error_message
+        )
 
     def scrape_images(self, url):
         """Scrape all image URLs from a webpage"""
@@ -95,22 +141,23 @@ class ImageClassifier:
 
         # Regular image tags
         for img in soup.find_all('img'):
-            if 'src' in img.attrs:
+            if hasattr(img, 'attrs') and 'src' in img.attrs:
                 src = img['src']
                 if not src.startswith('data:'):
                     absolute_url = urljoin(url, src)
                     image_urls.append(absolute_url)
 
         # Background images
-        for tag in soup.find_all(style=re.compile(r'background-image:\s*url\(.*\)')):
-            style = tag['style']
-            match = re.search(r'url\(["\']?(.*?)["\']?\)', style)
-            if match and not match.group(1).startswith('data:'):
-                absolute_url = urljoin(url, match.group(1))
-                image_urls.append(absolute_url)
+        for tag in soup.find_all(style=re.compile(r'background-image:\s*url\((.*?)\)')):
+            if hasattr(tag, 'attrs') and 'style' in tag.attrs:
+                style = tag['style']
+                match = re.search(r'url\([\"\']?(.*?)[\"\']?\)', style)
+                if match and not match.group(1).startswith('data:'):
+                    absolute_url = urljoin(url, match.group(1))
+                    image_urls.append(absolute_url)
 
         # JavaScript embedded images
-        script_pattern = re.compile(r'https?://[^\s"\']+?\.(jpg|jpeg|png|webp)(?:\?\w+)?', re.IGNORECASE)
+        script_pattern = re.compile(r'https?://[^\s\"\']+?\.(jpg|jpeg|png|webp)(?:\?\w+)?', re.IGNORECASE)
         image_urls.extend(urljoin(url, u) for u in script_pattern.findall(html))
 
         # Filter and prioritize likely product images
@@ -157,22 +204,32 @@ class ImageClassifier:
                 return {"raw_response": response.content, "error": "Could not parse as JSON"}
 
         except Exception as e:
-            print(f"Classification error for {image_url}: {str(e)}")
+            logger.error(f"Classification error for {image_url}: {str(e)}")
             return {"error": str(e), "image_url": image_url}
 
     def process_product(self, product_url, index):
         """Process a single product URL with improved error handling"""
         try:
             if not product_url or not product_url.startswith('http'):
-                return self._create_error_result({"product_url": product_url}, index, "Invalid URL provided")
+                return {
+                    "index": index,
+                    "product_url": product_url,
+                    "error": "Invalid URL provided",
+                    "success": False
+                }
 
-            print(f"\nProcessing product {index+1}: {product_url}")
+            logger.info(f"Processing product {index+1}: {product_url}")
 
             image_url = self.scrape_images(product_url)
             if not image_url:
-                return self._create_error_result({"product_url": product_url}, index, "No valid images found")
+                return {
+                    "index": index,
+                    "product_url": product_url,
+                    "error": "No valid images found",
+                    "success": False
+                }
 
-            print(f"Using image URL: {image_url}")
+            logger.info(f"Using image URL: {image_url}")
 
             result = self.classify_image(image_url)
 
@@ -186,37 +243,58 @@ class ImageClassifier:
                 }
             else:
                 error_msg = result.get("error", "Classification failed") if result else "Empty response"
-                return self._create_error_result(
-                    {"product_url": product_url},
-                    index,
-                    f"Classification failed: {error_msg}"
-                )
+                return {
+                    "index": index,
+                    "product_url": product_url,
+                    "error": f"Classification failed: {error_msg}",
+                    "success": False
+                }
 
         except Exception as e:
-            return self._create_error_result(
-                {"product_url": product_url},
-                index,
-                f"Processing error: {str(e)}"
-            )
+            logger.error(f"Processing error: {str(e)}")
+            return {
+                "index": index,
+                "product_url": product_url,
+                "error": f"Processing error: {str(e)}",
+                "success": False
+            }
 
-    async def classify_image_batch(self, batch_data: List[Dict[str, Any]], batch_id: int) -> Dict:
+    async def classify_image_batch(self, batch_data: List[Dict[str, Any]], batch_id: int) -> BatchResult:
         """Process a batch of product URLs"""
         results = []
         for i, item in enumerate(batch_data):
             product_url = item.get("Product URL", item.get("product", ""))
-            result = self.process_product(product_url, i)
-            results.append(result)
+            processed_result = self.process_product(product_url, i)
+
+            if processed_result.get("success"):
+                try:
+                    category_result = self._create_category_result(processed_result["result"], item, i)
+                    results.append(category_result)
+                except Exception as e:
+                    logger.error(f"Error creating category result: {str(e)}")
+                    category_result = self._create_error_result(item, i, f"Error creating category result: {str(e)}")
+                    results.append(category_result)
+            else:
+                # Create an error CategoryResult
+                error_msg = processed_result.get("error", "Unknown error")
+                category_result = self._create_error_result(item, i, error_msg)
+                results.append(category_result)
 
             # Be extra polite between items
             time.sleep(random.uniform(1, 3))
 
-        return {
-            "batch_id": batch_id,
-            "total_items": len(batch_data),
-            "successful": sum(1 for r in results if r.get("success", False)),
-            "failed": sum(1 for r in results if not r.get("success", False)),
-            "results": results
-        }
+        successful_count = sum(1 for r in results if r.category != "ERROR")
+        failed_count = len(results) - successful_count
+
+        return BatchResult(
+            batch_id=batch_id,
+            results=results,
+            timestamp=datetime.now().isoformat(),
+            processing_type="image",
+            total_processed=len(batch_data),
+            successful=successful_count,
+            failed=failed_count
+        )
 
 # Example usage
 if __name__ == "__main__":

@@ -115,22 +115,9 @@ class TextBasedFurnitureClassifier:
             f"Furniture Item {index + 1}"
         )
 
-        # Extract style tags and placement tags, ensuring they're lists
-        style_tags = result_data.get('style_tags', [])
-        if isinstance(style_tags, str):
-            style_tags = [style_tags]
-
-        placement_tags = result_data.get('placement_tags', [])
-        if isinstance(placement_tags, str):
-            placement_tags = [placement_tags]
-
         return CategoryResult(
             product_name=product_name,
             category=result_data.get('category', 'OTHER'),
-            primary_style=result_data.get('primary_style'),
-            secondary_style=result_data.get('secondary_style'),
-            style_tags=style_tags,
-            placement_tags=placement_tags,
             confidence=float(result_data.get('confidence', 0.5)),
             reasoning=result_data.get('reasoning', 'Category classification completed')
         )
@@ -149,10 +136,6 @@ class TextBasedFurnitureClassifier:
         return CategoryResult(
             product_name=product_name,
             category=category,
-            primary_style=None,
-            secondary_style=None,
-            style_tags=[],
-            placement_tags=[],
             confidence=0.3,
             reasoning="Could not parse classification response, used existing data"
         )
@@ -168,10 +151,6 @@ class TextBasedFurnitureClassifier:
         return CategoryResult(
             product_name=product_name,
             category="ERROR",
-            primary_style=None,
-            secondary_style=None,
-            style_tags=[],
-            placement_tags=[],
             confidence=0.0,
             reasoning=error_msg
         )
@@ -203,7 +182,6 @@ async def main():
     for item_result in result.results:
         print(f"\nProduct: {item_result.product_name}")
         print(f"Category: {item_result.category}")
-        print(f"Primary Style: {item_result.primary_style}")
         print(f"Confidence: {item_result.confidence}")
         print(f"Reasoning: {item_result.reasoning}")
 

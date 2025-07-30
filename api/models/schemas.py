@@ -9,10 +9,6 @@ class CategoryClassificationRequest(BaseModel):
 class CategoryResult(BaseModel):
     product_name: str
     category: str
-    primary_style: Optional[str] = None
-    secondary_style: Optional[str] = None
-    style_tags: List[str] = []
-    placement_tags: List[str] = []
     confidence: float
     reasoning: str
 

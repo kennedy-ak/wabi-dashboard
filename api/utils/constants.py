@@ -73,10 +73,6 @@ Respond in JSON format:
 {
     "product_name": "...",
     "category": "...",
-    "primary_style": "...",
-    "secondary_style": "...",
-    "style_tags": ["tag1", "tag2", "tag3"],
-    "placement_tags": ["room1", "room2"],
     "confidence": 0.95,
     "reasoning": "..."
 }
@@ -125,10 +121,6 @@ CATEGORY_CLASSIFICATION_PROMPT_TEXT_BASED ="""
 {
     "product_name": "string",
     "category": "SOFA/CHAIR/BED/etc.",
-    "primary_style": "string|null",
-    "secondary_style": "string|null",
-    "style_tags": ["string"],
-    "placement_tags": ["string"],
     "confidence": float,
     "reasoning": "string"
 }
@@ -150,12 +142,8 @@ json
 {
     "product_name": "Joss & Main Fleetwood 100'' Sofa",
     "category": "SOFA",
-    "primary_style": "Modern",
-    "secondary_style": null,
-    "style_tags": ["minimalist"],
-    "placement_tags": ["living room"],
     "confidence": 0.98,
-    "reasoning": "Product name contains 'sofa' and tags ('large size') support SOFA classification. Style is explicitly Modern."
+    "reasoning": "Product name contains 'sofa' and tags ('large size') support SOFA classification. Modern style with minimalist design."
 }
 Input (Ambiguous Case):
 
@@ -173,12 +161,8 @@ json
 {
     "product_name": "Storage Bench",
     "category": "BENCH",
-    "primary_style": "Japandi",
-    "secondary_style": null,
-    "style_tags": [],
-    "placement_tags": ["bedroom"],
     "confidence": 0.75,
-    "reasoning": "Name contains 'bench' but tags suggest storage functionality. Defaulting to BENCH as primary category."
+    "reasoning": "Name contains 'bench' but tags suggest storage functionality. Defaulting to BENCH as primary category with Japandi styling."
 }
 Edge Case Handling:
 

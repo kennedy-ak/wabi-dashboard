@@ -105,23 +105,9 @@ def format_categorization_result(result):
     
     formatted_results = []
     for item in result['results']:
-        # Format style information
-        primary_style = item.get('primary_style', '')
-        secondary_style = item.get('secondary_style', '')
-        style_display = primary_style
-        if secondary_style:
-            style_display = f"{primary_style} + {secondary_style}"
-        
-        # Format tags
-        style_tags = item.get('style_tags', [])
-        placement_tags = item.get('placement_tags', [])
-        
         formatted_results.append({
             'Product': item.get('product_name', 'Unknown'),
             'Category': item.get('category', 'Unknown'),
-            'Style': style_display,
-            'Style Tags': ', '.join(style_tags) if style_tags else '',
-            'Placement': ', '.join(placement_tags) if placement_tags else '',
             'Confidence': f"{item.get('confidence', 0):.2%}",
             'Reasoning': item.get('reasoning', '')
         })
@@ -223,7 +209,7 @@ def stream_categorization_results(data, toggle, product_column):
             )
             
             # Statistics
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Total Products", len(combined_df))
             with col2:
@@ -232,20 +218,16 @@ def stream_categorization_results(data, toggle, product_column):
             with col3:
                 unique_categories = combined_df['Category'].nunique()
                 st.metric("Unique Categories", unique_categories)
-            with col4:
-                unique_styles = combined_df['Style'].replace('', pd.NA).dropna().nunique()
-                st.metric("Unique Styles", unique_styles)
             
-            # Style breakdown
-            if 'Style' in combined_df.columns and not combined_df['Style'].str.strip().eq('').all():
-                st.markdown("### 🎨 Style Breakdown")
-                style_counts = combined_df[combined_df['Style'].str.strip() != '']['Style'].value_counts()
-                
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    st.bar_chart(style_counts)
-                with col2:
-                    st.dataframe(style_counts.reset_index().rename(columns={'index': 'Style', 'Style': 'Count'}), use_container_width=True)
+            # Category breakdown
+            st.markdown("### 📊 Category Breakdown")
+            category_counts = combined_df['Category'].value_counts()
+            
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.bar_chart(category_counts)
+            with col2:
+                st.dataframe(category_counts.reset_index().rename(columns={'Category': 'Count', 'index': 'Category'}), use_container_width=True)
     
     except requests.exceptions.Timeout:
         st.error("⏰ Request timed out. The processing is taking longer than expected.")
@@ -279,42 +261,17 @@ def main():
             "Choose categorization method:",
             options=[
                 ("Text-based", 1),
-                ("Image-based (URL scraping)", 0)
+                ("Image-based (Direct URLs)", 0)
             ],
             format_func=lambda x: x[0],
-            help="Text-based: Uses product descriptions and attributes\nImage-based: Scrapes images from product URLs"
+            help="Text-based: Uses product descriptions and attributes\nImage-based: Uses direct image URLs for classification"
         )
         
         toggle_value = processing_mode[1]
         
-        st.markdown("---")
+      
         
-        # Instructions
-        st.markdown("### 📋 Instructions")
-        if toggle_value == 1:
-            st.markdown("""
-            **Text-based Processing:**
-            1. Upload CSV with product data
-            2. Ensure you have descriptive columns
-            3. Processing: 10 items per batch
-            4. Uses product descriptions for AI categorization
-            5. **NEW**: Includes style classification (Modern, Japandi, Bohemian, etc.)
-            6. **NEW**: Provides style tags and placement recommendations
-            """)
-        else:
-            st.markdown("""
-            **Image-based Processing:**
-            1. Upload CSV with 'product' column containing URLs
-            2. Images will be scraped from URLs
-            3. Processing: 5 items per batch
-            4. Uses AI vision for categorization
-            5. **NEW**: Includes visual style analysis
-            6. **NEW**: Provides detailed style tags and room placement
-            
-            ⚠️ **Note**: Some websites (like Wayfair) may block scraping. 
-            The system will automatically fall back to text-based classification when needed.
-            """)
-    
+      
     # Main content
     st.markdown('<div class="section-header">📁 File Upload</div>', unsafe_allow_html=True)
     
@@ -365,13 +322,19 @@ def main():
                 st.write(f"• **Columns:** {len(df.columns)}")
                 st.write(f"• **Mode:** {processing_mode[0]}")
                 
-                # Column selection for product URLs (if image mode)
+                # Column selection for image URLs (if image mode)
                 if toggle_value == 0:
-                    st.markdown("**Product URL Column:**")
+                    st.markdown("**Image URL Column:**")
+                    # Look for common image URL column names
+                    image_columns = [col for col in df.columns if 'image' in col.lower() or 'url' in col.lower()]
+                    default_index = 0
+                    if image_columns:
+                        default_index = df.columns.tolist().index(image_columns[0])
+                    
                     product_column = st.selectbox(
-                        "Select column containing product URLs:",
+                        "Select column containing image URLs:",
                         options=df.columns.tolist(),
-                        index=0 if 'product' not in df.columns else df.columns.tolist().index('product')
+                        index=default_index
                     )
                 else:
                     product_column = 'product'  # Default
@@ -382,10 +345,10 @@ def main():
                     st.error(f"❌ Column '{product_column}' not found in the dataset")
                     return
                 
-                # Check for valid URLs
+                # Check for valid image URLs
                 sample_urls = df[product_column].dropna().head(5).tolist()
                 if sample_urls:
-                    st.markdown("**Sample URLs:**")
+                    st.markdown("**Sample Image URLs:**")
                     for i, url in enumerate(sample_urls, 1):
                         st.text(f"{i}. {url}")
             
@@ -406,62 +369,30 @@ def main():
         except Exception as e:
             st.error(f"❌ Error reading {file_extension.upper()} file: {str(e)}")
             st.info("Please make sure your file is properly formatted and not corrupted.")
-    
     else:
-        # Show example data format
-        st.markdown('<div class="section-header">📖 Example Data Format</div>', unsafe_allow_html=True)
+        # Show example format when no file is uploaded
+        st.markdown('<div class="section-header">📋 Expected File Format</div>', unsafe_allow_html=True)
         
-        if toggle_value == 1:
-            # Text-based example
-            example_data = {
-                'product_name': ['iPhone 14', 'Nike Air Max', 'Coffee Maker'],
-                'description': ['Latest smartphone with advanced camera', 'Running shoes for athletes', 'Automatic drip coffee maker'],
-                'brand': ['Apple', 'Nike', 'Cuisinart'],
-                'price': ['$999', '$120', '$79']
-            }
-        else:
-            # Image-based example
-            example_data = {
-                'product': [
-                    'https://example.com/iphone-14',
-                    'https://example.com/nike-shoes',
-                    'https://example.com/coffee-maker'
-                ],
-                'product_name': ['iPhone 14', 'Nike Air Max', 'Coffee Maker'],
-                'brand': ['Apple', 'Nike', 'Cuisinart']
-            }
+        tab1, tab2 = st.tabs(["Text-based Format", "Image-based Format"])
         
-        example_df = pd.DataFrame(example_data)
-        st.dataframe(example_df, use_container_width=True)
-        
-        # Sample file downloads
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            csv_sample = example_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Sample CSV",
-                data=csv_sample,
-                file_name=f"sample_data_{processing_mode[0].lower().replace('-', '_').replace(' ', '_')}.csv",
-                mime="text/csv"
-            )
-        
-        with col2:
-            # Create Excel sample
-            try:
-                excel_buffer = BytesIO()
-                example_df.to_excel(excel_buffer, index=False, engine='openpyxl')
-                excel_data = excel_buffer.getvalue()
-                
-                st.download_button(
-                    label="📥 Download Sample Excel",
-                    data=excel_data,
-                    file_name=f"sample_data_{processing_mode[0].lower().replace('-', '_').replace(' ', '_')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            except ImportError:
-                st.error("Excel support requires openpyxl: `pip install openpyxl`")
-                st.button("📥 Excel Not Available", disabled=True)
+        with tab1:
+            st.markdown("**For text-based classification, your file should contain:**")
+            example_text_df = pd.DataFrame({
+                'Product Name': ['Modern Leather Sofa', 'Oak Dining Table'],
+                'Description': ['High-quality leather sofa with minimalist design', 'Solid oak table with distressed finish'],
+                'Material': ['Genuine leather', 'Oak wood'],
+                'Color': ['Black', 'Natural wood']
+            })
+            st.dataframe(example_text_df, use_container_width=True)
+            
+        with tab2:
+            st.markdown("**For image-based classification, your file should contain:**")
+            example_image_df = pd.DataFrame({
+                'Product Name': ['Modern Leather Sofa', 'Oak Dining Table'],
+                'Image URL': ['https://example.com/sofa.jpg', 'https://example.com/table.jpg']
+            })
+            st.dataframe(example_image_df, use_container_width=True)
+            st.info("💡 Image URLs should point directly to image files (jpg, png, webp, etc.)")
 
 if __name__ == "__main__":
     main()

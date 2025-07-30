@@ -93,11 +93,11 @@ async def classify_furniture_category(request: CategoryClassificationRequest):
         if request.toggle not in [0, 1]:
             raise HTTPException(status_code=400, detail="Toggle must be 0 or 1")
 
-        # Check if product column exists when using image mode
+        # Check if image column exists when using image mode
         if request.toggle == 0:
             for item in request.data:
-                if request.product_column not in item:
-                    raise HTTPException(status_code=400, detail=f"Product column '{request.product_column}' not found in data")
+                if "Image URL" not in item and "image_url" not in item:
+                    raise HTTPException(status_code=400, detail="Image URL column not found in data. Expected 'Image URL' or 'image_url'")
 
         logger.info(f"Request ID: {request_id} - Starting furniture category classification for {len(request.data)} items, toggle={request.toggle}")
 

@@ -18,6 +18,8 @@ class PoliteScraper:
         self.request_count = 0
         self.failed_attempts = {}  # Track failed attempts per domain
         self.session = requests.Session()
+        self.max_concurrent_requests = 3  # Limit concurrent requests per domain
+        self.domain_semaphores = {}  # Per-domain rate limiting
         
         # More diverse and recent user agents
         self.user_agents = [
@@ -215,6 +217,33 @@ class PoliteScraper:
                 return max(unique_urls, key=len)
         
         return None
+
+    def get_domain_semaphore(self, domain: str) -> asyncio.Semaphore:
+        """Get or create semaphore for domain-specific rate limiting"""
+        if domain not in self.domain_semaphores:
+            self.domain_semaphores[domain] = asyncio.Semaphore(self.max_concurrent_requests)
+        return self.domain_semaphores[domain]
+    
+    async def scrape_multiple_urls(self, urls: List[str]) -> List[Optional[str]]:
+        """Scrape multiple URLs concurrently with per-domain rate limiting"""
+        from urllib.parse import urlparse
+        
+        tasks = []
+        for url in urls:
+            domain = urlparse(url).netloc
+            semaphore = self.get_domain_semaphore(domain)
+            task = asyncio.create_task(self._scrape_with_domain_limit(semaphore, url))
+            tasks.append(task)
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Convert exceptions to None
+        return [result if not isinstance(result, Exception) else None for result in results]
+    
+    async def _scrape_with_domain_limit(self, semaphore: asyncio.Semaphore, url: str):
+        """Scrape URL with domain-specific rate limiting"""
+        async with semaphore:
+            return await self.scrape_images_safely(url)
 
     def _is_likely_product_image(self, url):
         """Check if URL is likely a product image"""

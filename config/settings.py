@@ -20,6 +20,14 @@ class Settings:
     TEXT_BATCH_SIZE = 10
     IMAGE_BATCH_SIZE = 5
     
+    # Concurrency Configuration
+    MAX_IMAGE_WORKERS = 3  # Concurrent image classifications
+    MAX_TEXT_WORKERS = 2   # Concurrent text classifications
+    MAX_SCRAPER_WORKERS = 3  # Concurrent scraping requests per domain
+    
+    # Batch Processing
+    TEXT_CHUNK_SIZE = 5    # Items per text API call
+    
     # CORS Configuration
     CORS_ORIGINS = ["*"]
     CORS_CREDENTIALS = True

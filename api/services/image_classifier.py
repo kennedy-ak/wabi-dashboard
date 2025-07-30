@@ -7,6 +7,8 @@ import asyncio
 import logging
 import re
 from datetime import datetime
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 
 from api.models import CategoryResult, BatchResult
 
@@ -17,6 +19,8 @@ logger = logging.getLogger(__name__)
 class ImageClassifier:
     def __init__(self):
         self.model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        # Add thread pool for concurrent processing
+        self.max_workers = 3  # Conservative to avoid rate limits
 
     def _create_category_result(self, result_data: Dict[str, Any], original_item: Dict[str, Any], index: int) -> CategoryResult:
         """Create category classification result from parsed data"""
@@ -125,38 +129,69 @@ class ImageClassifier:
             }
 
     async def classify_image_batch(self, batch_data: List[Dict[str, Any]], batch_id: int) -> BatchResult:
-        """Process a batch of image URLs"""
-        results = []
+        """Process a batch of image URLs with concurrent processing"""
+        
+        # Create tasks for concurrent processing
+        tasks = []
         for i, item in enumerate(batch_data):
             image_url = item.get("Image URL", item.get("image_url", ""))
-            processed_result = self.process_product(image_url, i)
-
-            if processed_result.get("success"):
+            task = asyncio.create_task(self._process_product_async(image_url, i, item))
+            tasks.append(task)
+        
+        # Process all items concurrently with limited concurrency
+        semaphore = asyncio.Semaphore(self.max_workers)
+        results = await asyncio.gather(*[self._process_with_semaphore(semaphore, task) for task in tasks])
+        
+        # Convert results to CategoryResult objects
+        category_results = []
+        for result in results:
+            if result.get("success"):
                 try:
-                    category_result = self._create_category_result(processed_result["result"], item, i)
-                    results.append(category_result)
+                    category_result = self._create_category_result(result["result"], result["original_item"], result["index"])
+                    category_results.append(category_result)
                 except Exception as e:
-                    logger.error(f"Error creating category result: {str(e)}")
-                    category_result = self._create_error_result(item, i, f"Error creating category result: {str(e)}")
-                    results.append(category_result)
+                    category_result = self._create_error_result(result["original_item"], result["index"], f"Error creating result: {str(e)}")
+                    category_results.append(category_result)
             else:
-                # Create an error CategoryResult
-                error_msg = processed_result.get("error", "Unknown error")
-                category_result = self._create_error_result(item, i, error_msg)
-                results.append(category_result)
-
-        successful_count = sum(1 for r in results if r.category != "ERROR")
-        failed_count = len(results) - successful_count
-
+                category_result = self._create_error_result(result["original_item"], result["index"], result.get("error", "Unknown error"))
+                category_results.append(category_result)
+        
+        successful_count = sum(1 for r in category_results if r.category != "ERROR")
+        failed_count = len(category_results) - successful_count
+        
         return BatchResult(
             batch_id=batch_id,
-            results=results,
+            results=category_results,
             timestamp=datetime.now().isoformat(),
             processing_type="image",
             total_processed=len(batch_data),
             successful=successful_count,
             failed=failed_count
         )
+    
+    async def _process_with_semaphore(self, semaphore: asyncio.Semaphore, task):
+        """Process task with semaphore to limit concurrency"""
+        async with semaphore:
+            return await task
+    
+    async def _process_product_async(self, image_url: str, index: int, original_item: Dict[str, Any]):
+        """Async wrapper for process_product"""
+        loop = asyncio.get_event_loop()
+        
+        # Run the synchronous classify_image in a thread pool
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            try:
+                result = await loop.run_in_executor(executor, self.process_product, image_url, index)
+                result["original_item"] = original_item
+                return result
+            except Exception as e:
+                return {
+                    "index": index,
+                    "image_url": image_url,
+                    "error": f"Async processing error: {str(e)}",
+                    "success": False,
+                    "original_item": original_item
+                }
 
 # Example usage
 if __name__ == "__main__":

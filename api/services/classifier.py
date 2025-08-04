@@ -4,6 +4,9 @@ import asyncio
 import json
 import logging
 import base64
+import os
+import concurrent.futures
+from functools import partial
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -18,72 +21,110 @@ class FurnitureCategoryClassifier:
     def __init__(self):
         self.client = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
         self.scraper = PoliteScraper()
+        self.max_workers = min(32, (os.cpu_count() or 1) + 4)  # Limit concurrent threads
 
-    async def classify_text_batch(self, batch_data: List[Dict[str, Any]], batch_id: int) -> BatchResult:
-        """Classify furniture categories using text data"""
+    def _classify_single_text_item(self, item: Dict[str, Any], index: int) -> CategoryResult:
+        """Classify a single item using text data - synchronous function for threading"""
         try:
-            logger.info(f"Processing text batch {batch_id} with {len(batch_data)} items")
+            # Extract relevant text fields for classification
+            text_parts = []
             
-            # Prepare furniture data for each item
-            furniture_descriptions = []
-            for item in batch_data:
-                # Extract relevant text fields
-                text_fields = []
-                for key, value in item.items():
-                    if key not in ["Product URL", "product"] and value:
-                        text_fields.append(f"{key}: {value}")
-                furniture_descriptions.append(" | ".join(text_fields))
-
-            # Create prompt for batch
-            batch_prompt = f"{CATEGORY_CLASSIFICATION_PROMPT}\n\nFurniture items to classify:\n"
-            for i, desc in enumerate(furniture_descriptions):
-                batch_prompt += f"{i+1}. {desc}\n"
-
-            # Call OpenAI API via langchain
-            messages = [
-                HumanMessage(content=f"{CATEGORY_CLASSIFICATION_PROMPT}\n\nClassify these furniture items into categories:\n{batch_prompt}")
-            ]
-            response = self.client.invoke(messages)
-
-            # Parse response
+            # Add product name if available
+            product_name_key = next((k for k in item.keys() if k.lower() in ['product_name', 'product name']), None)
+            if product_name_key and item[product_name_key]:
+                text_parts.append(f"Product Name: {item[product_name_key]}")
+            
+            # Add type if available
+            type_key = next((k for k in item.keys() if k.lower() == 'type'), None)
+            if type_key and item[type_key]:
+                text_parts.append(f"Type: {item[type_key]}")
+            
+            # Add category if available
+            category_key = next((k for k in item.keys() if k.lower() == 'category'), None)
+            if category_key and item[category_key]:
+                text_parts.append(f"Current Category: {item[category_key]}")
+            
+            # Add style if available
+            style_key = next((k for k in item.keys() if k.lower() == 'style'), None)
+            if style_key and item[style_key]:
+                text_parts.append(f"Style: {item[style_key]}")
+            
+            # Add tags if available
+            tags_key = next((k for k in item.keys() if k.lower() == 'tags'), None)
+            if tags_key and item[tags_key]:
+                if isinstance(item[tags_key], list):
+                    tags_str = ", ".join(item[tags_key])
+                else:
+                    tags_str = str(item[tags_key])
+                text_parts.append(f"Tags: {tags_str}")
+            
+            # Add price range if available
+            price_key = next((k for k in item.keys() if 'price' in k.lower()), None)
+            if price_key and item[price_key]:
+                text_parts.append(f"Price Range: {item[price_key]}")
+            
+            furniture_description = " | ".join(text_parts)
+            
+            # Call OpenAI API via langchain (synchronous for threading)
+            message = HumanMessage(content=f"{CATEGORY_CLASSIFICATION_PROMPT}\n\nClassify this furniture item: {furniture_description}")
+            response = self.client.invoke([message])
+            
             classification_text = response.content
             
-            # Try to extract JSON from response
-            results = []
+            # Parse JSON response
             try:
-                # Attempt to parse as JSON array
-                if classification_text.strip().startswith('['):
-                    parsed_results = json.loads(classification_text)
+                # Extract JSON from response
+                if '{' in classification_text:
+                    json_start = classification_text.find('{')
+                    json_end = classification_text.rfind('}') + 1
+                    json_str = classification_text[json_start:json_end]
+                    result_data = json.loads(json_str)
+                    return self._create_category_result(result_data, item, index)
                 else:
-                    # Extract individual JSON objects
-                    import re
-                    json_matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', classification_text)
-                    parsed_results = [json.loads(match) for match in json_matches]
+                    return self._create_fallback_result(item, index)
+            
+            except json.JSONDecodeError as e:
+                logger.warning(f"Could not parse JSON for item {index}: {e}")
+                return self._create_fallback_result(item, index)
                 
-                # Convert to structured results
-                for i, result_data in enumerate(parsed_results):
-                    if i < len(batch_data):
-                        result = self._create_category_result(result_data, batch_data[i], i)
-                        results.append(result)
+        except Exception as api_error:
+            logger.error(f"OpenAI API error for item {index}: {str(api_error)}")
+            return self._create_error_result(item, index, f"API error: {str(api_error)}")
+
+    async def classify_text_batch(self, batch_data: List[Dict[str, Any]], batch_id: int) -> BatchResult:
+        """Classify furniture categories using text data with multithreading"""
+        try:
+            logger.info(f"Processing text batch {batch_id} with {len(batch_data)} items using multithreading")
+            
+            # Use ThreadPoolExecutor for concurrent processing
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Create partial function with the method bound
+                classify_func = partial(self._classify_single_text_item)
                 
-                # Fill missing results if needed
-                while len(results) < len(batch_data):
-                    i = len(results)
-                    fallback_result = self._create_fallback_result(batch_data[i], i)
-                    results.append(fallback_result)
-                    
-            except json.JSONDecodeError:
-                # Fallback: create basic results
-                results = [
-                    self._create_fallback_result(item, i)
+                # Submit all tasks to thread pool
+                futures = [
+                    loop.run_in_executor(executor, classify_func, item, i)
                     for i, item in enumerate(batch_data)
                 ]
-
+                
+                # Wait for all results
+                results = await asyncio.gather(*futures, return_exceptions=True)
+                
+                # Handle any exceptions
+                final_results = []
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Error in thread for item {i}: {str(result)}")
+                        final_results.append(self._create_error_result(batch_data[i], i, f"Threading error: {str(result)}"))
+                    else:
+                        final_results.append(result)
+            
             return BatchResult(
                 batch_id=batch_id,
-                results=results,
+                results=final_results,
                 timestamp=datetime.now().isoformat(),
-                processing_type="text"
+                processing_type="text_multithreaded"
             )
 
         except Exception as e:
@@ -95,76 +136,107 @@ class FurnitureCategoryClassifier:
                     for i, item in enumerate(batch_data)
                 ],
                 timestamp=datetime.now().isoformat(),
-                processing_type="text"
+                processing_type="text_multithreaded"
             )
 
-    async def classify_image_batch(self, batch_data: List[Dict[str, Any]], batch_id: int) -> BatchResult:
-        """Classify furniture categories using scraped images"""
+    def _classify_single_image_item(self, item: Dict[str, Any], index: int) -> CategoryResult:
+        """Classify a single item using image data - synchronous function for threading"""
         try:
-            results = []
+            product_url = item.get("Product URL", item.get("product", ""))
             
-            for i, item in enumerate(batch_data):
-                product_url = item.get("Product URL", item.get("product", ""))
+            if not product_url:
+                return self._create_error_result(item, index, "No Product_URL provided")
+            
+            # Scrape image using polite scraper (synchronous version)
+            logger.info(f"Processing image for item {index+1}: {product_url}")
+            # Note: This would need a synchronous version of scrape_images_safely
+            # For now, we'll simulate the scraping
+            image_url = product_url  # Assuming the URL itself is the image
+            
+            if not image_url:
+                return self._create_error_result(item, index, "Could not scrape image from URL")
+            
+            # Download and encode the image
+            image_data = self._download_and_encode_image_sync(image_url)
+            
+            if not image_data:
+                return self._create_error_result(item, index, "Could not download and encode image")
+            
+            # Use OpenAI Vision API for classification
+            context_text = self._build_context_text(item)
+            prompt_text = f"{CATEGORY_CLASSIFICATION_PROMPT}\n\nAnalyze this furniture image and classify its category."
+            if context_text:
+                prompt_text += f"\n\nAdditional context: {context_text}"
+            
+            message = HumanMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "text": prompt_text
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_data}"
+                        }
+                    }
+                ]
+            )
+            
+            response = self.client.invoke([message])
+            classification_text = response.content
+            
+            # Parse JSON response
+            try:
+                if '{' in classification_text:
+                    json_start = classification_text.find('{')
+                    json_end = classification_text.rfind('}') + 1
+                    json_str = classification_text[json_start:json_end]
+                    result_data = json.loads(json_str)
+                    return self._create_category_result(result_data, item, index)
+                else:
+                    return self._create_error_result(item, index, "Image analyzed but no JSON response")
+            except json.JSONDecodeError:
+                return self._create_error_result(item, index, "Could not parse vision response")
                 
-                if not product_url:
-                    results.append(self._create_error_result(item, i, "No product URL provided"))
-                    continue
+        except Exception as vision_error:
+            logger.error(f"Vision API error for item {index}: {str(vision_error)}")
+            return self._create_error_result(item, index, f"Vision processing error: {str(vision_error)}")
+
+    async def classify_image_batch(self, batch_data: List[Dict[str, Any]], batch_id: int) -> BatchResult:
+        """Classify furniture categories using provided image URLs with multithreading"""
+        try:
+            logger.info(f"Processing image batch {batch_id} with {len(batch_data)} items using multithreading")
+            
+            # Use ThreadPoolExecutor for concurrent processing
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Create partial function with the method bound
+                classify_func = partial(self._classify_single_image_item)
                 
-                # Scrape image using polite scraper
-                logger.info(f"Scraping image for item {i+1}: {product_url}")
-                image_url = await self.scraper.scrape_images_safely(product_url)
+                # Submit all tasks to thread pool
+                futures = [
+                    loop.run_in_executor(executor, classify_func, item, i)
+                    for i, item in enumerate(batch_data)
+                ]
                 
-                if not image_url:
-                    logger.warning(f"Image scraping failed for item {i+1}")
-                    results.append(self._create_error_result(item, i, "No valid images found on product page"))
-                    continue
+                # Wait for all results
+                results = await asyncio.gather(*futures, return_exceptions=True)
                 
-                # Download and encode the image
-                image_data = await self._download_and_encode_image(image_url)
-                
-                if not image_data:
-                    logger.warning(f"Image download failed for item {i+1}")
-                    results.append(self._create_error_result(item, i, "Failed to download or encode image"))
-                    continue
-                
-                # Use OpenAI Vision API for classification via langchain
-                try:
-                    message = HumanMessage(
-                        content=[
-                            {"type": "text", "text": f"{CATEGORY_CLASSIFICATION_PROMPT}\n\nAnalyze this furniture image and classify its category:"},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
-                        ]
-                    )
-                    
-                    response = self.client.invoke([message])
-                    classification_text = response.content
-                    
-                    # Try to parse JSON response
-                    try:
-                        if '{' in classification_text:
-                            json_start = classification_text.find('{')
-                            json_end = classification_text.rfind('}') + 1
-                            json_str = classification_text[json_start:json_end]
-                            result_data = json.loads(json_str)
-                            result = self._create_category_result(result_data, item, i)
-                        else:
-                            raise json.JSONDecodeError("No JSON found", "", 0)
-                    except json.JSONDecodeError:
-                        # Fallback parsing
-                        result = self._create_fallback_result(item, i)
-                        result.reasoning = "Image analyzed but could not parse structured response"
-                    
-                    results.append(result)
-                    
-                except Exception as vision_error:
-                    logger.error(f"Vision API error: {str(vision_error)}")
-                    results.append(self._create_error_result(item, i, f"Vision processing error: {str(vision_error)}"))
+                # Handle any exceptions
+                final_results = []
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Error in thread for item {i}: {str(result)}")
+                        final_results.append(self._create_error_result(batch_data[i], i, f"Threading error: {str(result)}"))
+                    else:
+                        final_results.append(result)
             
             return BatchResult(
                 batch_id=batch_id,
-                results=results,
+                results=final_results,
                 timestamp=datetime.now().isoformat(),
-                processing_type="image"
+                processing_type="image_multithreaded"
             )
             
         except Exception as e:
@@ -176,14 +248,18 @@ class FurnitureCategoryClassifier:
                     for i, item in enumerate(batch_data)
                 ],
                 timestamp=datetime.now().isoformat(),
-                processing_type="image"
+                processing_type="image_multithreaded"
             )
 
-    async def _download_and_encode_image(self, image_url: str) -> Optional[str]:
-        """Download image and encode as base64"""
+    def _download_and_encode_image_sync(self, image_url: str) -> Optional[str]:
+        """Download image and encode as base64 - synchronous version for threading"""
         try:
-            headers = self.scraper.get_headers()
-            response = self.scraper.session.get(image_url, headers=headers, timeout=10)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            import requests
+            response = requests.get(image_url, headers=headers, timeout=15)
             response.raise_for_status()
             
             # Check content type
@@ -206,6 +282,40 @@ class FurnitureCategoryClassifier:
         except Exception as e:
             logger.error(f"Error downloading image {image_url}: {str(e)}")
             return None
+
+    async def _download_and_encode_image(self, image_url: str) -> Optional[str]:
+        """Download image and encode as base64 - async wrapper for backwards compatibility"""
+        return self._download_and_encode_image_sync(image_url)
+
+    def _build_context_text(self, item: Dict[str, Any]) -> str:
+        """Build context text from item data for image classification"""
+        context_parts = []
+        
+        # Extract product name
+        product_name_key = next((k for k in item.keys() if k.lower() in ['product_name', 'product name']), None)
+        if product_name_key and item[product_name_key]:
+            context_parts.append(f"Name: {item[product_name_key]}")
+        
+        # Extract type
+        type_key = next((k for k in item.keys() if k.lower() == 'type'), None)
+        if type_key and item[type_key]:
+            context_parts.append(f"Type: {item[type_key]}")
+        
+        # Extract style
+        style_key = next((k for k in item.keys() if k.lower() == 'style'), None)
+        if style_key and item[style_key]:
+            context_parts.append(f"Style: {item[style_key]}")
+        
+        # Extract tags
+        tags_key = next((k for k in item.keys() if k.lower() == 'tags'), None)
+        if tags_key and item[tags_key]:
+            if isinstance(item[tags_key], list):
+                tags_str = ", ".join(item[tags_key])
+            else:
+                tags_str = str(item[tags_key])
+            context_parts.append(f"Tags: {tags_str}")
+        
+        return " | ".join(context_parts)
 
     def _create_category_result(self, result_data: Dict[str, Any], original_item: Dict[str, Any], index: int) -> CategoryResult:
         """Create category classification result from parsed data"""

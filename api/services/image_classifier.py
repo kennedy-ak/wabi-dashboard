@@ -13,6 +13,9 @@ import json
 import asyncio
 import logging
 from datetime import datetime
+import concurrent.futures
+import os
+from functools import partial
 
 from api.models import CategoryResult, BatchResult
 
@@ -80,6 +83,7 @@ class ImageClassifier:
     def __init__(self):
         self.scraper = PoliteScraper()
         self.model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        self.max_workers = min(32, (os.cpu_count() or 1) + 4)  # Limit concurrent threads
 
     def _create_category_result(self, result_data: Dict[str, Any], original_item: Dict[str, Any], index: int) -> CategoryResult:
         """Create category classification result from parsed data"""
@@ -107,7 +111,7 @@ class ImageClassifier:
             secondary_style=result_data.get('secondary_style'),
             style_tags=style_tags,
             placement_tags=placement_tags,
-            confidence=float(result_data.get('confidence', 0.5)),
+            confidence=float(result_data.get('confidence', 0.5)) if result_data.get('confidence') not in [None, float('inf'), float('-inf')] and str(result_data.get('confidence')).lower() != 'nan' else 0.5,
             reasoning=result_data.get('reasoning', 'Category classification completed')
         )
 
@@ -177,7 +181,7 @@ class ImageClassifier:
                     {"type": "text", "text": """Analyze this furniture image and respond ONLY with valid JSON:
                     {
                         "product_name": "string",
-                        "category": "SOFA|CHAIR|BED|TABLE|NIGHTSTAND|STOOL|OTHER",
+                        "category": "SOFA|CHAIR|BED|TABLE|NIGHTSTAND|STOOL|STORAGE|DESK|BENCH|OTTOMAN|LIGHTING|DECOR|VASE|TV_STAND|PAINTINGS|OTHER",
                         "primary_style": "string",
                         "secondary_style": "string",
                         "style_tags": ["string"],
@@ -207,14 +211,52 @@ class ImageClassifier:
             logger.error(f"Classification error for {image_url}: {str(e)}")
             return {"error": str(e), "image_url": image_url}
 
-    def process_product(self, product_url, index):
-        """Process a single product URL with improved error handling"""
+    def _process_single_item_sync(self, item: Dict[str, Any], index: int) -> CategoryResult:
+        """Process a single item synchronously for multithreading"""
         try:
-            if not product_url or not product_url.startswith('http'):
+            # Try multiple possible URL column names
+            product_url = (
+                item.get("Product URL") or 
+                item.get("product") or 
+                item.get("url") or 
+                item.get("URL") or 
+                item.get("product_url") or
+                ""
+            )
+            
+            # More comprehensive URL validation
+            if not product_url or not isinstance(product_url, str) or not (product_url.startswith('http://') or product_url.startswith('https://')):
+                return self._create_error_result(item, index, f"Invalid URL provided: '{product_url}' - must start with http:// or https://")
+
+            logger.info(f"Processing product {index+1}: {product_url}")
+
+            image_url = self.scrape_images(product_url)
+            if not image_url:
+                return self._create_error_result(item, index, "No valid images found")
+
+            logger.info(f"Using image URL: {image_url}")
+
+            result = self.classify_image(image_url)
+
+            if result and not result.get("error"):
+                return self._create_category_result(result, item, index)
+            else:
+                error_msg = result.get("error", "Classification failed") if result else "Empty response"
+                return self._create_error_result(item, index, f"Classification failed: {error_msg}")
+
+        except Exception as e:
+            logger.error(f"Processing error for item {index}: {str(e)}")
+            return self._create_error_result(item, index, f"Processing error: {str(e)}")
+
+    def process_product(self, product_url, index):
+        """Process a single product URL with improved error handling (legacy method)"""
+        try:
+            # More comprehensive URL validation
+            if not product_url or not isinstance(product_url, str) or not (product_url.startswith('http://') or product_url.startswith('https://')):
                 return {
                     "index": index,
                     "product_url": product_url,
-                    "error": "Invalid URL provided",
+                    "error": f"Invalid URL provided: '{product_url}' - must start with http:// or https://",
                     "success": False
                 }
 
@@ -260,41 +302,64 @@ class ImageClassifier:
             }
 
     async def classify_image_batch(self, batch_data: List[Dict[str, Any]], batch_id: int) -> BatchResult:
-        """Process a batch of product URLs"""
-        results = []
-        for i, item in enumerate(batch_data):
-            product_url = item.get("Product URL", item.get("product", ""))
-            processed_result = self.process_product(product_url, i)
+        """Process a batch of product URLs with multithreading"""
+        try:
+            logger.info(f"Processing image batch {batch_id} with {len(batch_data)} items using multithreading (max_workers={self.max_workers})")
 
-            if processed_result.get("success"):
-                try:
-                    category_result = self._create_category_result(processed_result["result"], item, i)
-                    results.append(category_result)
-                except Exception as e:
-                    logger.error(f"Error creating category result: {str(e)}")
-                    category_result = self._create_error_result(item, i, f"Error creating category result: {str(e)}")
-                    results.append(category_result)
-            else:
-                # Create an error CategoryResult
-                error_msg = processed_result.get("error", "Unknown error")
-                category_result = self._create_error_result(item, i, error_msg)
-                results.append(category_result)
+            # Use ThreadPoolExecutor for concurrent processing
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Create partial function with the method bound
+                classify_func = partial(self._process_single_item_sync)
 
-            # Be extra polite between items
-            time.sleep(random.uniform(1, 3))
+                # Submit all tasks to thread pool
+                futures = [
+                    loop.run_in_executor(executor, classify_func, item, i)
+                    for i, item in enumerate(batch_data)
+                ]
 
-        successful_count = sum(1 for r in results if r.category != "ERROR")
-        failed_count = len(results) - successful_count
+                # Wait for all results
+                results = await asyncio.gather(*futures, return_exceptions=True)
 
-        return BatchResult(
-            batch_id=batch_id,
-            results=results,
-            timestamp=datetime.now().isoformat(),
-            processing_type="image",
-            total_processed=len(batch_data),
-            successful=successful_count,
-            failed=failed_count
-        )
+                # Handle any exceptions
+                final_results = []
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Error in thread for item {i}: {str(result)}")
+                        final_results.append(self._create_error_result(batch_data[i], i, f"Threading error: {str(result)}"))
+                    else:
+                        final_results.append(result)
+
+            successful_count = sum(1 for r in final_results if r.category != "ERROR")
+            failed_count = len(final_results) - successful_count
+
+            return BatchResult(
+                batch_id=batch_id,
+                results=final_results,
+                timestamp=datetime.now().isoformat(),
+                processing_type="image_multithreaded",
+                total_processed=len(batch_data),
+                successful=successful_count,
+                failed=failed_count
+            )
+
+        except Exception as e:
+            logger.error(f"Error in image classification batch {batch_id}: {str(e)}")
+            # Create error results for all items
+            error_results = [
+                self._create_error_result(item, i, f"Batch processing error: {str(e)}")
+                for i, item in enumerate(batch_data)
+            ]
+            
+            return BatchResult(
+                batch_id=batch_id,
+                results=error_results,
+                timestamp=datetime.now().isoformat(),
+                processing_type="image_multithreaded",
+                total_processed=len(batch_data),
+                successful=0,
+                failed=len(batch_data)
+            )
 
 # Example usage
 if __name__ == "__main__":

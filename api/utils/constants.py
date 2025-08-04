@@ -14,6 +14,9 @@ FURNITURE CATEGORIES AVAILABLE:
 - OTTOMAN: Ottomans, footstools, poufs
 - LIGHTING: Lamps, chandeliers, pendant lights, floor lamps
 - DECOR: Decorative items, artwork, mirrors, plants
+- VASE: Table vases, floor vases, decorative bottles, ceramic vases, glass vases, stoneware vases
+- TV_STAND: TV stands, entertainment centers, media consoles, entertainment units, stands
+- PAINTINGS: Wall art, prints, paintings, framed artwork, canvas art
 - OTHER: Items that don't fit the above categories
 
 DESIGN STYLES & TAGGING GUIDELINES:
@@ -102,6 +105,16 @@ CATEGORY_CLASSIFICATION_PROMPT_TEXT_BASED ="""
    - TABLE: Contains "table"/"desk" + tags like "dining"/"pedestal"
    - NIGHTSTAND: Contains "nightstand"/"bedside" + tags like "drawer"/"storage"
    - STOOL: Contains "stool" + tags like "accent"/"footrest"
+   - STORAGE: Contains "dresser"/"wardrobe"/"cabinet"/"bookcase" + tags like "storage"/"drawers"
+   - DESK: Contains "desk"/"office desk"/"writing desk" + tags like "computer"/"study"
+   - BENCH: Contains "bench" + tags like "dining"/"entryway"/"storage"
+   - OTTOMAN: Contains "ottoman"/"footstool"/"pouf" + tags like "upholstered"/"accent"
+   - LIGHTING: Contains "lamp"/"light"/"chandelier"/"pendant" + tags like "floor"/"table"
+   - DECOR: Contains "decorative"/"artwork"/"mirror"/"plant" + tags like "accent"/"wall"
+   - VASE: Contains "vase"/"bottle" + tags like "ceramic"/"glass"/"decorative"
+   - TV_STAND: Contains "tv stand"/"entertainment"/"media console" + tags like "storage"/"stand"
+   - PAINTINGS: Contains "painting"/"art"/"print"/"canvas" + tags like "wall"/"framed"
+   - OTHER: Items that don't match above categories
 
 2. **Style Extraction**:
    - Split `style` by "/" or ","
@@ -190,7 +203,7 @@ Low confidence: Flag in reasoning (e.g., "Low confidence due to ambiguous tags")
 
 Required Compliance:
 
-Always validate against allowed categories: ["SOFA", "CHAIR", "BED", "TABLE", "NIGHTSTAND", "STOOL", "STORAGE", "DESK", "BENCH", "OTTOMAN", "LIGHTING", "DECOR", "OTHER"]
+Always validate against allowed categories: ["SOFA", "CHAIR", "BED", "TABLE", "NIGHTSTAND", "STOOL", "STORAGE", "DESK", "BENCH", "OTTOMAN", "LIGHTING", "DECOR", "VASE", "TV_STAND", "PAINTINGS", "OTHER"]
 
 Never invent new categories
 

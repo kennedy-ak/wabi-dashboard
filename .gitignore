@@ -238,3 +238,4 @@ exports/
 # Documentation builds
 docs/_build/
 site/
+..aider*

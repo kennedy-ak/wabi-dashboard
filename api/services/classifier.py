@@ -234,7 +234,7 @@ class FurnitureCategoryClassifier:
             secondary_style=result_data.get('secondary_style'),
             style_tags=style_tags,
             placement_tags=placement_tags,
-            confidence=float(result_data.get('confidence', 0.5)),
+            confidence=float(result_data.get('confidence', 0.5)) if result_data.get('confidence') not in [None, float('inf'), float('-inf')] and str(result_data.get('confidence')).lower() != 'nan' else 0.5,
             reasoning=result_data.get('reasoning', 'Category classification completed')
         )
 

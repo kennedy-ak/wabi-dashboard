@@ -227,7 +227,8 @@ def stream_categorization_results(data, toggle, product_column):
             with col1:
                 st.metric("Total Products", len(combined_df))
             with col2:
-                avg_confidence = combined_df['Confidence'].str.rstrip('%').astype(float).mean()
+                confidence_values = combined_df['Confidence'].str.rstrip('%').astype(float)
+                avg_confidence = confidence_values.dropna().mean() if not confidence_values.dropna().empty else 0.0
                 st.metric("Average Confidence", f"{avg_confidence:.1f}%")
             with col3:
                 unique_categories = combined_df['Category'].nunique()

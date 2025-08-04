@@ -239,4 +239,3 @@ exports/
 docs/_build/
 site/
 .aider*
-.claude/settings.local.json

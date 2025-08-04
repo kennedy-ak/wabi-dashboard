@@ -238,4 +238,5 @@ exports/
 # Documentation builds
 docs/_build/
 site/
-..aider*
+.aider*
+.claude/settings.local.json

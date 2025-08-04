@@ -234,6 +234,7 @@ exports/
 
 #claude
 .claude
+.claude_cache/
 
 # Documentation builds
 docs/_build/

@@ -1,0 +1,734 @@
+# WABI FURNITURE DASHBOARD - COMPREHENSIVE TECHNICAL DOCUMENTATION
+# ==================================================================
+
+## TABLE OF CONTENTS
+===================
+1. Project Overview & Architecture
+2. Core Components Deep Dive
+3. Multi-Threading & Concurrency Implementation
+4. Data Flow & Processing Pipeline
+5. API Endpoints & Integration
+6. Configuration & Settings
+7. Error Handling & Logging
+8. Deployment & Performance Optimization
+9. File-by-File Code Explanation
+
+## 1. PROJECT OVERVIEW & ARCHITECTURE
+====================================
+
+### Purpose
+The Wabi Furniture Dashboard is an AI-powered furniture categorization system that processes product data through two main modes:
+- **Text-based classification**: Analyzes product descriptions, names, and attributes
+- **Image-based classification**: Uses computer vision to classify furniture from product images or scraped web content
+
+### Technology Stack
+- **Backend**: FastAPI (Python) - High-performance REST API
+- **Frontend**: Streamlit - Interactive web dashboard
+- **AI/ML**: OpenAI GPT-4o-mini for text/vision processing
+- **Concurrency**: AsyncIO + ThreadPoolExecutor for multi-threading
+- **Web Scraping**: BeautifulSoup + requests with polite rate limiting
+- **Data Processing**: Pandas for CSV/Excel handling
+- **Evaluation**: LangSmith for model evaluation and dataset management
+
+### System Architecture
+```
+┌─────────────────┐    HTTP/JSON    ┌──────────────────┐
+│                 │ <-------------> │                  │
+│  Streamlit UI   │                 │   FastAPI Server │
+│  (Frontend)     │                 │   (Backend)      │
+│                 │                 │                  │
+└─────────────────┘                 └──────────────────┘
+                                             │
+                                             ▼
+                    ┌────────────────────────────────────────┐
+                    │         Classification Engine          │
+                    │                                        │
+                    │  ┌─────────────────┐ ┌──────────────┐ │
+                    │  │ Text Classifier │ │ Image        │ │
+                    │  │ - OpenAI GPT    │ │ Classifier   │ │
+                    │  │ - Batch Proc.   │ │ - Vision API │ │
+                    │  │ - Multi-thread  │ │ - Scraping   │ │
+                    │  └─────────────────┘ └──────────────┘ │
+                    └────────────────────────────────────────┘
+                                             │
+                                             ▼
+                    ┌────────────────────────────────────────┐
+                    │        Supporting Services             │
+                    │                                        │
+                    │ ┌─────────────┐ ┌──────────────────┐   │
+                    │ │   Polite    │ │    LangSmith     │   │
+                    │ │   Scraper   │ │   Evaluation     │   │
+                    │ │ - Rate Limit│ │   - Datasets     │   │
+                    │ │ - Anti-bot  │ │   - Metrics      │   │
+                    │ └─────────────┘ └──────────────────┘   │
+                    └────────────────────────────────────────┘
+```
+
+## 2. CORE COMPONENTS DEEP DIVE
+===============================
+
+### A. FastAPI Backend (main.py)
+**Purpose**: Main application entry point and server configuration
+**Key Features**:
+- CORS middleware for cross-origin requests
+- Lifespan management for startup/shutdown events
+- Router integration for modular endpoint organization
+- Centralized configuration management
+
+**Code Explanation**:
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Handles application lifecycle - startup and shutdown events
+    logger.info("Starting up Furniture Category Classification API")
+    yield  # Application runs here
+    logger.info("Shutting down Furniture Category Classification API")
+```
+
+### B. Streamlit Frontend (app.py)
+**Purpose**: Interactive web interface for users to upload data and view results
+**Key Features**:
+- File upload support (CSV, Excel)
+- Real-time streaming results display
+- Data validation and preview
+- Statistical analysis and visualization
+- Download functionality for processed results
+
+**Multi-Threading Integration**:
+- Uses `requests.post()` with `stream=True` for non-blocking communication with FastAPI
+- Implements progress bars and real-time status updates
+- Processes streaming JSON responses line by line
+
+**Code Structure**:
+```python
+def stream_categorization_results(data, toggle, product_column):
+    # Main streaming function that:
+    # 1. Sends data to FastAPI backend
+    # 2. Processes streaming responses
+    # 3. Updates UI in real-time
+    # 4. Handles errors gracefully
+```
+
+### C. Configuration Management (config/settings.py)
+**Purpose**: Centralized configuration for all system parameters
+**Key Settings**:
+- Concurrency limits (workers, batch sizes)
+- API configurations (OpenAI, server settings)
+- Processing parameters (chunk sizes, timeouts)
+- CORS and security settings
+
+**Multi-Threading Configuration**:
+```python
+MAX_IMAGE_WORKERS = 3      # Concurrent image classifications
+MAX_TEXT_WORKERS = 2       # Concurrent text classifications  
+MAX_SCRAPER_WORKERS = 3    # Concurrent scraping requests per domain
+TEXT_BATCH_SIZE = 10       # Items per text batch
+IMAGE_BATCH_SIZE = 5       # Items per image batch
+TEXT_CHUNK_SIZE = 5        # Items per API call
+```
+
+## 3. MULTI-THREADING & CONCURRENCY IMPLEMENTATION
+=================================================
+
+### A. Text Classification Multi-Threading (api/services/text_classifier.py)
+
+**Architecture**:
+1. **Async/Await Pattern**: Main coordination layer
+2. **Semaphores**: Rate limiting and concurrency control
+3. **ThreadPoolExecutor**: Blocking I/O operations
+4. **Chunk Processing**: Parallel processing of data chunks
+
+**Detailed Implementation**:
+
+```python
+class TextBasedFurnitureClassifier:
+    def __init__(self):
+        self.max_workers = 2  # Conservative for OpenAI API rate limits
+    
+    async def classify_text_batch(self, batch_data, batch_id):
+        # STEP 1: Split large batches into smaller chunks
+        chunk_size = 5  # Process 5 items per API call
+        chunks = [batch_data[i:i + chunk_size] for i in range(0, len(batch_data), chunk_size)]
+        
+        # STEP 2: Create async tasks for each chunk
+        tasks = []
+        for chunk_idx, chunk in enumerate(chunks):
+            task = asyncio.create_task(self._process_text_chunk(chunk, chunk_idx))
+            tasks.append(task)
+        
+        # STEP 3: Use semaphore to limit concurrent API calls
+        semaphore = asyncio.Semaphore(self.max_workers)
+        chunk_results = await asyncio.gather(*[
+            self._process_chunk_with_semaphore(semaphore, task) for task in tasks
+        ])
+        
+        # STEP 4: Flatten and return results
+        all_results = []
+        for chunk_result in chunk_results:
+            all_results.extend(chunk_result)
+        
+        return BatchResult(...)
+
+    async def _process_chunk_with_semaphore(self, semaphore, task):
+        # Rate limiting wrapper
+        async with semaphore:
+            return await task
+
+    async def _process_text_chunk(self, chunk_data, chunk_idx):
+        # Execute OpenAI API call in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = await loop.run_in_executor(
+                executor, 
+                self._classify_chunk_sync,  # Synchronous function
+                chunk_data, 
+                chunk_idx
+            )
+            return result
+
+    def _classify_chunk_sync(self, chunk_data, chunk_idx):
+        # Actual OpenAI API call (synchronous)
+        # This runs in a separate thread to avoid blocking the event loop
+        response = self.client.chat.completions.create(...)
+        return processed_results
+```
+
+**Why This Architecture**:
+- **Semaphores prevent rate limiting**: OpenAI has strict rate limits
+- **ThreadPoolExecutor handles blocking I/O**: API calls don't block the event loop
+- **Chunk processing maximizes throughput**: Multiple small requests vs. one large request
+- **Error isolation**: If one chunk fails, others continue processing
+
+### B. Image Classification Multi-Threading (api/services/image_classifier.py)
+
+**Architecture**: Similar to text classification but with additional complexity for image processing
+
+```python
+class ImageClassifier:
+    def __init__(self):
+        self.max_workers = 3  # Slightly higher for image processing
+    
+    async def classify_image_batch(self, batch_data, batch_id):
+        # STEP 1: Create tasks for concurrent processing
+        tasks = []
+        for i, item in enumerate(batch_data):
+            image_url = item.get("Image URL", item.get("image_url", ""))
+            task = asyncio.create_task(self._process_product_async(image_url, i, item))
+            tasks.append(task)
+        
+        # STEP 2: Process with limited concurrency
+        semaphore = asyncio.Semaphore(self.max_workers)
+        results = await asyncio.gather(*[
+            self._process_with_semaphore(semaphore, task) for task in tasks
+        ])
+        
+        return BatchResult(...)
+
+    async def _process_product_async(self, image_url, index, original_item):
+        # Async wrapper for synchronous image processing
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = await loop.run_in_executor(
+                executor, 
+                self.process_product,  # Synchronous processing
+                image_url, 
+                index
+            )
+            result["original_item"] = original_item
+            return result
+```
+
+### C. Web Scraping Multi-Threading (api/utils/scraper.py)
+
+**Advanced Rate Limiting & Anti-Detection**:
+
+```python
+class PoliteScraper:
+    def __init__(self):
+        self.max_concurrent_requests = 3  # Per-domain limit
+        self.domain_semaphores = {}       # Domain-specific rate limiting
+        self.failed_attempts = {}         # Exponential backoff tracking
+    
+    def get_domain_semaphore(self, domain):
+        # Create per-domain semaphores for fine-grained rate limiting
+        if domain not in self.domain_semaphores:
+            self.domain_semaphores[domain] = asyncio.Semaphore(self.max_concurrent_requests)
+        return self.domain_semaphores[domain]
+    
+    async def scrape_multiple_urls(self, urls):
+        # Concurrent scraping with domain-specific rate limiting
+        tasks = []
+        for url in urls:
+            domain = urlparse(url).netloc
+            semaphore = self.get_domain_semaphore(domain)
+            task = asyncio.create_task(self._scrape_with_domain_limit(semaphore, url))
+            tasks.append(task)
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return [result if not isinstance(result, Exception) else None for result in results]
+    
+    async def _scrape_with_domain_limit(self, semaphore, url):
+        # Domain-specific rate limiting
+        async with semaphore:
+            return await self.scrape_images_safely(url)
+    
+    def get_random_delay(self, domain=None):
+        # Exponential backoff for problematic domains
+        base_delay = random.uniform(3, 8)
+        
+        if domain and domain in self.failed_attempts:
+            failure_count = self.failed_attempts[domain]
+            backoff_multiplier = min(2 ** failure_count, 16)
+            base_delay *= backoff_multiplier
+        
+        return base_delay
+```
+
+**Anti-Detection Features**:
+- Random user agents rotation
+- Variable request delays
+- Exponential backoff for rate-limited domains
+- Session cookie management
+- Realistic header patterns
+
+## 4. DATA FLOW & PROCESSING PIPELINE
+====================================
+
+### Processing Flow Diagram
+```
+User Upload (CSV/Excel)
+         │
+         ▼
+┌─────────────────┐
+│ Data Validation │ ── Checks: format, columns, URLs
+│ & Preprocessing │
+└─────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Mode Selection  │ ── Toggle: 1=Text, 0=Image/URL
+└─────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Batch Creation  │ ── Split into optimal batch sizes
+└─────────────────┘
+         │
+    ┌────▼────┐
+    │ Toggle? │
+    └────┬────┘
+         │
+  ┌─────────────────┐
+  │                 │
+  ▼                 ▼
+┌──────────────┐ ┌────────────────┐
+│ Text Mode    │ │ Image Mode     │
+│              │ │                │
+│ 1. Chunk     │ │ 1. URL Extract │
+│ 2. Parallel  │ │ 2. Web Scrape  │
+│ 3. OpenAI    │ │ 3. Image DL    │
+│ 4. Parse     │ │ 4. Vision API  │
+└──────────────┘ └────────────────┘
+         │                 │
+         └─────────┬───────┘
+                   ▼
+         ┌─────────────────┐
+         │ Result Assembly │ ── Combine, validate, format
+         └─────────────────┘
+                   │
+                   ▼
+         ┌─────────────────┐
+         │ Stream to UI    │ ── Real-time updates
+         └─────────────────┘
+                   │
+                   ▼
+         ┌─────────────────┐
+         │ Final Export    │ ── CSV download, statistics
+         └─────────────────┘
+```
+
+### Data Structures
+
+**Input Data Format**:
+```python
+# Text mode input
+{
+    "Product Name": "Modern Leather Sofa",
+    "Description": "High-quality leather sofa with minimalist design",
+    "Material": "Genuine leather",
+    "Color": "Black",
+    "Dimensions": "84\"W x 36\"D x 30\"H"
+}
+
+# Image mode input  
+{
+    "Product Name": "Modern Leather Sofa",
+    "Image URL": "https://example.com/sofa.jpg"
+}
+```
+
+**Processing Result Format**:
+```python
+CategoryResult(
+    product_name="Modern Leather Sofa",
+    category="SOFA",
+    confidence=0.95,
+    reasoning="Product name contains 'sofa' and description indicates upholstered seating furniture"
+)
+
+BatchResult(
+    batch_id=1,
+    results=[CategoryResult, ...],
+    timestamp="2024-01-01T12:00:00",
+    processing_type="text",  # or "image"
+    total_processed=10,
+    successful=9,
+    failed=1
+)
+```
+
+## 5. API ENDPOINTS & INTEGRATION
+================================
+
+### A. Classification Router (api/routers/classification.py)
+
+**Main Endpoint**: `POST /classify-category`
+
+```python
+async def classify_furniture_category(request: CategoryClassificationRequest):
+    # Input validation
+    if not request.data:
+        raise HTTPException(status_code=400, detail="No data provided")
+    
+    # Streaming response setup
+    return StreamingResponse(
+        generate_classification_stream(request.data, request.toggle, request_id),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
+```
+
+**Streaming Implementation**:
+```python
+async def generate_classification_stream(data, toggle, request_id):
+    batch_size = settings.TEXT_BATCH_SIZE if toggle == 1 else settings.IMAGE_BATCH_SIZE
+    
+    # Process in batches with real-time streaming
+    for i in range(0, len(data), batch_size):
+        batch_data = data[i:i + batch_size]
+        batch_id = i // batch_size + 1
+        
+        try:
+            if toggle == 1:
+                result = await text_classifier.classify_text_batch(batch_data, batch_id)
+            else:
+                result = await image_classifier.classify_image_batch(batch_data, batch_id)
+            
+            # Stream result as Server-Sent Events format
+            yield f"data: {json.dumps(result.model_dump())}\n\n"
+            
+            await asyncio.sleep(0.1)  # Prevent overwhelming
+            
+        except Exception as e:
+            # Stream error information
+            error_result = BatchResult(
+                batch_id=batch_id,
+                results=[],
+                processing_type="error",
+                error=str(e)
+            )
+            yield f"data: {json.dumps(error_result.model_dump())}\n\n"
+    
+    # Send completion signal
+    completion_result = BatchResult(
+        batch_id=-1,
+        processing_type="complete",
+        total_processed=len(data)
+    )
+    yield f"data: {json.dumps(completion_result.model_dump())}\n\n"
+```
+
+### B. Request/Response Models (api/models/schemas.py)
+
+**Pydantic Models for Type Safety**:
+```python
+class CategoryClassificationRequest(BaseModel):
+    data: List[Dict[str, Any]]  # Product data
+    toggle: int                 # 1=text, 0=image
+    product_column: str = "Product URL"
+
+class CategoryResult(BaseModel):
+    product_name: str
+    category: str              # SOFA, CHAIR, BED, etc.
+    confidence: float         # 0.0 to 1.0
+    reasoning: str           # Explanation
+
+class BatchResult(BaseModel):
+    batch_id: int
+    results: List[CategoryResult]
+    timestamp: str
+    processing_type: str     # "text", "image", "error", "complete"
+    error: Optional[str] = None
+    total_processed: Optional[int] = None
+```
+
+## 6. CONFIGURATION & SETTINGS
+==============================
+
+### Environment Variables (.env)
+```bash
+OPENAI_API_KEY=your_openai_key_here
+LANGSMITH_API_KEY=your_langsmith_key_here
+```
+
+### Settings Configuration (config/settings.py)
+```python
+class Settings:
+    # Performance Tuning
+    TEXT_BATCH_SIZE = 10           # Optimal for text processing
+    IMAGE_BATCH_SIZE = 5           # Lower due to image processing overhead
+    TEXT_CHUNK_SIZE = 5            # Items per OpenAI API call
+    
+    # Concurrency Limits
+    MAX_IMAGE_WORKERS = 3          # Balance speed vs. rate limits
+    MAX_TEXT_WORKERS = 2           # Conservative for OpenAI API
+    MAX_SCRAPER_WORKERS = 3        # Per domain limit
+    
+    # Furniture Categories
+    FURNITURE_CATEGORIES = [
+        "SOFA", "CHAIR", "BED", "TABLE", "NIGHTSTAND", "STOOL", 
+        "STORAGE", "DESK", "BENCH", "OTTOMAN", "LIGHTING", "DECOR", "OTHER"
+    ]
+```
+
+## 7. ERROR HANDLING & LOGGING
+==============================
+
+### Comprehensive Error Handling Strategy
+
+**1. API Level Errors**:
+```python
+try:
+    result = await classifier.classify_text_batch(batch_data, batch_id)
+except asyncio.TimeoutError:
+    error_result = BatchResult(
+        batch_id=batch_id,
+        results=[],
+        processing_type="error",
+        error="TimeoutError: Processing took too long"
+    )
+except Exception as e:
+    logger.error(f"Unexpected error: {str(e)}")
+    error_result = BatchResult(
+        batch_id=batch_id,
+        processing_type="error", 
+        error=str(e)
+    )
+```
+
+**2. Rate Limiting Handling**:
+```python
+def _handle_rate_limit(self, domain, attempt):
+    if domain not in self.failed_attempts:
+        self.failed_attempts[domain] = 0
+    self.failed_attempts[domain] += 1
+    
+    # Exponential backoff calculation
+    backoff_time = min(60 * (2 ** attempt), 300)  # Cap at 5 minutes
+```
+
+**3. Logging Configuration**:
+```python
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Usage throughout codebase
+logger.info(f"Processing batch {batch_id} with {len(batch_data)} items")
+logger.warning(f"Rate limited. Backing off for {backoff_time:.1f} seconds...")
+logger.error(f"Classification failed: {error_msg}")
+```
+
+## 8. DEPLOYMENT & PERFORMANCE OPTIMIZATION
+==========================================
+
+### Performance Optimizations Implemented
+
+**1. Batch Processing**:
+- Text: 10 items per batch, 5 items per API call
+- Image: 5 items per batch due to processing overhead
+- Dynamic batching based on processing mode
+
+**2. Connection Pooling**:
+```python
+# Reuse HTTP sessions for efficiency
+self.session = requests.Session()
+
+# Session cookie management for anti-detection
+if random.random() < 0.2:
+    self.session.cookies.clear()
+```
+
+**3. Memory Management**:
+- Streaming responses to avoid memory buildup
+- Chunked processing to limit memory usage
+- Garbage collection friendly patterns
+
+**4. Caching Strategy**:
+```python
+# Domain-specific semaphores cached
+if domain not in self.domain_semaphores:
+    self.domain_semaphores[domain] = asyncio.Semaphore(self.max_concurrent_requests)
+```
+
+### Deployment Commands
+```bash
+# Development
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Production  
+uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+
+# Streamlit frontend
+streamlit run app.py --server.port 8501
+```
+
+## 9. FILE-BY-FILE CODE EXPLANATION
+===================================
+
+### A. main.py - FastAPI Application Entry Point
+**Lines 1-11**: Import dependencies and configure logging
+**Lines 13-19**: Lifespan context manager for startup/shutdown events
+**Lines 21-26**: FastAPI app creation with configuration from settings
+**Lines 28-35**: CORS middleware configuration for cross-origin requests
+**Lines 37-39**: Router inclusion for modular endpoint organization
+**Lines 41-43**: Development server runner with uvicorn
+
+### B. app.py - Streamlit Frontend (398 lines)
+**Lines 1-24**: Import dependencies and FastAPI URL configuration
+**Lines 26-73**: Custom CSS styling for professional UI appearance
+**Lines 75-82**: FastAPI health check function
+**Lines 83-99**: CSV data validation function
+**Lines 101-115**: Result formatting for display
+**Lines 117-238**: Main streaming function that:
+  - Sends requests to FastAPI backend
+  - Processes Server-Sent Events responses
+  - Updates UI in real-time
+  - Handles errors and timeouts gracefully
+**Lines 239-396**: Main Streamlit application with:
+  - File upload interface
+  - Data preview and validation
+  - Processing mode selection
+  - Real-time results display
+  - Statistics and export functionality
+
+### C. api/services/text_classifier.py - Text Processing Engine (235 lines)
+**Lines 1-25**: Import dependencies and setup logging
+**Lines 27-54**: Main batch processing function with:
+  - Chunk creation (5 items per chunk)
+  - Async task creation for parallel processing
+  - Semaphore-controlled concurrency
+  - Result flattening and assembly
+**Lines 56-59**: Semaphore wrapper for rate limiting
+**Lines 61-77**: Async chunk processing with ThreadPoolExecutor
+**Lines 79-151**: Synchronous OpenAI API processing in thread pool
+**Lines 153-201**: Result creation and error handling functions
+
+### D. api/services/image_classifier.py - Image Processing Engine (207 lines)
+**Lines 1-24**: Import dependencies and LangChain setup
+**Lines 57-89**: Single image classification with GPT-4 Vision
+**Lines 91-129**: Individual product processing with error handling
+**Lines 131-195**: Batch processing with:
+  - Concurrent task creation
+  - Semaphore-controlled processing
+  - ThreadPoolExecutor for blocking operations
+  - Result assembly and error handling
+
+### E. api/utils/scraper.py - Polite Web Scraper (267 lines)
+**Lines 1-33**: Import dependencies and user agent setup
+**Lines 35-51**: Random delay calculation with exponential backoff
+**Lines 53-84**: Realistic header generation for anti-detection
+**Lines 86-167**: Main request function with:
+  - Rate limiting and domain-specific delays
+  - Multiple retry attempts
+  - Error handling for different HTTP status codes
+  - Session management for natural behavior
+**Lines 168-173**: Rate limit tracking and backoff management
+**Lines 175-219**: Image scraping with BeautifulSoup parsing
+**Lines 221-246**: Concurrent URL processing with domain-specific semaphores
+**Lines 248-266**: Product image detection heuristics
+
+### F. api/routers/classification.py - API Endpoints (119 lines)
+**Lines 1-20**: Import dependencies and classifier initialization
+**Lines 22-79**: Streaming response generator that:
+  - Processes data in configurable batches
+  - Routes to appropriate classifier based on toggle
+  - Handles errors gracefully
+  - Sends completion signals
+**Lines 81-119**: Main classification endpoint with:
+  - Request validation
+  - Error handling
+  - Streaming response setup
+  - Proper HTTP headers for streaming
+
+### G. api/models/schemas.py - Data Models (33 lines)
+**Lines 4-7**: Request model for classification API
+**Lines 9-13**: Individual classification result model
+**Lines 15-22**: Batch result model with metadata
+**Lines 23-27**: Health check response model
+**Lines 29-33**: Root endpoint response model
+
+### H. config/settings.py - Configuration Management (44 lines)
+**Lines 6-15**: API metadata and server configuration
+**Lines 17**: OpenAI API key from environment
+**Lines 19-29**: Performance and concurrency settings
+**Lines 32-35**: CORS configuration for web security
+**Lines 38-41**: Furniture category definitions
+
+### I. api/utils/constants.py - AI Prompts (198 lines)
+**Lines 1-79**: Comprehensive furniture classification prompt with:
+  - Category definitions and examples
+  - Style guide with color palettes and keywords
+  - Placement suggestions
+  - JSON response format specification
+**Lines 81-198**: Text-based classification prompt with:
+  - Rule-based processing instructions
+  - Priority system (name > tags)
+  - Confidence scoring guidelines
+  - Edge case handling
+
+### J. api/evaluators/text_batch_evaluator.py - LangSmith Integration (141 lines)
+**Lines 1-71**: Dataset management with error handling
+**Lines 72-90**: Target function wrapper for async classifier
+**Lines 93-125**: Strict evaluation function for model testing
+
+### K. api/evaluators/image_batch_evaluator.py - Image Evaluation (240 lines)
+**Lines 80-110**: Enhanced URL validation for furniture domains
+**Lines 112-191**: Comprehensive target function with:
+  - Multiple input format handling
+  - URL validation and cleaning
+  - Async classifier integration
+  - Detailed error reporting
+**Lines 192-224**: Strict evaluation metrics
+
+## CONCLUSION
+=============
+
+This furniture classification system demonstrates advanced Python development practices:
+
+1. **Concurrent Processing**: Multi-threaded architecture with AsyncIO and ThreadPoolExecutors
+2. **Rate Limiting**: Sophisticated anti-detection and backoff strategies
+3. **Error Resilience**: Comprehensive error handling at every level
+4. **Scalable Design**: Modular architecture with clear separation of concerns
+5. **Real-time Processing**: Streaming responses for immediate user feedback
+6. **Performance Optimization**: Batch processing and connection pooling
+7. **Type Safety**: Pydantic models for data validation
+8. **Professional UI**: Streamlit with custom CSS and real-time updates
+
+The system successfully handles both text-based and image-based furniture classification with robust error handling, making it suitable for production deployment in e-commerce environments.

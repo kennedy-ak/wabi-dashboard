@@ -229,8 +229,14 @@ exports/
 # Machine learning models
 *.pkl
 *.model
-
+.claude
 
 # Documentation builds
 docs/_build/
 site/
+.aider.chat.history.md
+.aider.input.history
+.aider.input.history
+.aider.tags.cache.v4/
+guide.txt
+test_url_parsing.py

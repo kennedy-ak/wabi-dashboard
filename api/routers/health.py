@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from datetime import datetime
 import os
 
-from ..models import HealthResponse, RootResponse
+from ..models.schemas import HealthResponse, RootResponse
 from config import settings
 
 router = APIRouter()

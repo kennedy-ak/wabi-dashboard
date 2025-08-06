@@ -105,23 +105,9 @@ def format_categorization_result(result):
     
     formatted_results = []
     for item in result['results']:
-        # Format style information
-        primary_style = item.get('primary_style', '')
-        secondary_style = item.get('secondary_style', '')
-        style_display = primary_style
-        if secondary_style:
-            style_display = f"{primary_style} + {secondary_style}"
-        
-        # Format tags
-        style_tags = item.get('style_tags', [])
-        placement_tags = item.get('placement_tags', [])
-        
         formatted_results.append({
-            'Product': item.get('product_name', 'Unknown'),
-            'Category': item.get('category', 'Unknown'),
-            'Style': style_display,
-            'Style Tags': ', '.join(style_tags) if style_tags else '',
-            'Placement': ', '.join(placement_tags) if placement_tags else '',
+            'Product': item.get('name', 'Unknown'),
+            'Category': item.get('predicted_category', 'Unknown'),
             'Confidence': f"{item.get('confidence', 0):.2%}",
             'Reasoning': item.get('reasoning', '')
         })
@@ -131,10 +117,23 @@ def format_categorization_result(result):
 def stream_categorization_results(data, toggle, product_column):
     """Stream categorization results from FastAPI"""
     try:
+        # Convert data to FurnitureItem format
+        furniture_items = []
+        for item in data:
+            furniture_item = {
+                "Product_Name": str(item.get('product_name', item.get('Product_Name', 'Unknown'))),
+                "Type": item.get('Type'),
+                "Category": item.get('Category'),
+                "Style": item.get('Style'),
+                "Tags": item.get('Tags'),
+                "Price_Range_USD": item.get('Price_Range_USD'),
+                "Product_URL": item.get(product_column) if toggle == 0 else None
+            }
+            furniture_items.append(furniture_item)
+        
         payload = {
-            "data": data,
-            "toggle": toggle,
-            "product_column": product_column
+            "data": furniture_items,
+            "toggle": toggle
         }
         
         response = requests.post(
@@ -223,7 +222,7 @@ def stream_categorization_results(data, toggle, product_column):
             )
             
             # Statistics
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Total Products", len(combined_df))
             with col2:
@@ -233,20 +232,16 @@ def stream_categorization_results(data, toggle, product_column):
             with col3:
                 unique_categories = combined_df['Category'].nunique()
                 st.metric("Unique Categories", unique_categories)
-            with col4:
-                unique_styles = combined_df['Style'].replace('', pd.NA).dropna().nunique()
-                st.metric("Unique Styles", unique_styles)
             
-            # Style breakdown
-            if 'Style' in combined_df.columns and not combined_df['Style'].str.strip().eq('').all():
-                st.markdown("### 🎨 Style Breakdown")
-                style_counts = combined_df[combined_df['Style'].str.strip() != '']['Style'].value_counts()
-                
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    st.bar_chart(style_counts)
-                with col2:
-                    st.dataframe(style_counts.reset_index().rename(columns={'index': 'Style', 'Style': 'Count'}), use_container_width=True)
+            # Category breakdown
+            st.markdown("### 📊 Category Breakdown")
+            category_counts = combined_df['Category'].value_counts()
+            
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.bar_chart(category_counts)
+            with col2:
+                st.dataframe(category_counts.reset_index().rename(columns={'index': 'Category', 'Category': 'Count'}), use_container_width=True)
     
     except requests.exceptions.Timeout:
         st.error("⏰ Request timed out. The processing is taking longer than expected.")

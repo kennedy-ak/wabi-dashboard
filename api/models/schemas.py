@@ -1,18 +1,25 @@
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
+class FurnitureItem(BaseModel):
+    """Pydantic model for furniture item data."""
+    product_name: str
+    type: Optional[str] = None
+    style: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    price_range_usd: Optional[str] = None
+    product_url: Optional[str] = None
+    image_url: Optional[str] = None
+    suggested_placement: Optional[List[str]] = None
+
 class CategoryClassificationRequest(BaseModel):
-    data: List[Dict[str, Any]]
-    toggle: int  # 1 for text, 0 for URL/image
-    product_column: str = "Product URL"
+    """Request model for category classification."""
+    data: List[FurnitureItem]
+    toggle: int  # 1 for text, 0 for image
 
 class CategoryResult(BaseModel):
-    product_name: str
-    category: str
-    primary_style: Optional[str] = None
-    secondary_style: Optional[str] = None
-    style_tags: List[str] = []
-    placement_tags: List[str] = []
+    name: str
+    predicted_category: str
     confidence: float
     reasoning: str
 

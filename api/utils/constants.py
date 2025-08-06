@@ -1,3 +1,37 @@
+FURNITURE_CATEGORY_CLASSIFICATION_PROMPT = """
+You are a furniture categorization expert. Your task is to classify furniture items into specific categories based on the provided information.
+
+FURNITURE CATEGORIES AVAILABLE:
+- SOFA: All types of sofas, couches, sectionals, loveseats
+- CHAIR: Armchairs, accent chairs, dining chairs, office chairs, recliners
+- BED: Beds, bed frames, platform beds, bunk beds, daybeds
+- TABLE: Dining tables, coffee tables, side tables, console tables, desk tables
+- NIGHTSTAND: Nightstands, bedside tables, end tables near beds
+- STOOL: Bar stools, counter stools, step stools, ottoman stools
+- STORAGE: Dressers, wardrobes, cabinets, bookcases, storage units
+- DESK: Office desks, writing desks, computer desks, study tables
+- BENCH: Dining benches, entryway benches, storage benches
+- OTTOMAN: Ottomans, footstools, poufs
+- LIGHTING: Lamps, chandeliers, pendant lights, floor lamps
+- DECOR: Decorative items, artwork, mirrors, plants
+- OTHER: Items that don't fit the above categories
+
+INSTRUCTIONS:
+- Analyze the furniture item carefully
+- Choose the most appropriate single category
+- Provide confidence score (0-1) based on how certain you are
+- Give brief reasoning for your classification
+- If uncertain between categories, choose the primary function
+
+Respond in JSON format:
+{
+    "product_name": "...",
+    "predicted_category": "...",
+    "confidence": 0.95,
+    "reasoning": "..."
+}
+"""
+
 CATEGORY_CLASSIFICATION_PROMPT = """
 You are a furniture categorization and style expert. Your task is to classify furniture items into specific categories and identify their design style based on the provided information.
 

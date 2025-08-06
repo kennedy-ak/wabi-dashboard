@@ -11,6 +11,9 @@ FURNITURE CATEGORIES AVAILABLE:
 - STORAGE: Dressers, wardrobes, cabinets, bookcases, storage units
 - DESK: Office desks, writing desks, computer desks, study tables
 - BENCH: Dining benches, entryway benches, storage benches
+- VASE: All types of vase, table vase, Floor vase, decorative bottles
+- TV STAND: All types of tv stands
+- PAINTINGS: All types of painting, prints
 - OTTOMAN: Ottomans, footstools, poufs
 - LIGHTING: Lamps, chandeliers, pendant lights, floor lamps
 - DECOR: Decorative items, artwork, mirrors, plants

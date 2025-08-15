@@ -105,10 +105,18 @@ def format_categorization_result(result):
     
     formatted_results = []
     for item in result['results']:
+        # Format embedding info for display
+        embedding_info = "None"
+        if item.get('embedding'):
+            embedding_length = len(item['embedding'])
+            embedding_info = f"Vector ({embedding_length}D)"
+
         formatted_results.append({
             'Product': item.get('name', 'Unknown'),
             'Category': item.get('predicted_category', 'Unknown'),
             'Confidence': f"{item.get('confidence', 0):.2%}",
+            'Description': item.get('description', 'No description available'),
+            'Embedding': embedding_info,
             'Reasoning': item.get('reasoning', '')
         })
     

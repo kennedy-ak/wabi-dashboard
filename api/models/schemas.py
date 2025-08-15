@@ -22,6 +22,8 @@ class CategoryResult(BaseModel):
     predicted_category: str
     confidence: float
     reasoning: str
+    description: Optional[str] = None
+    embedding: Optional[List[float]] = None
 
 class BatchResult(BaseModel):
     batch_id: int

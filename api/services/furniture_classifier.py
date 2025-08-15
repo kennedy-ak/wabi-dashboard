@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 
 from api.models.schemas import CategoryResult, BatchResult
 from api.utils.constants import FURNITURE_CATEGORY_CLASSIFICATION_PROMPT
+from api.services.embedding_service import EmbeddingService
+from api.services.description_service import DescriptionService
 
 load_dotenv()
 
@@ -28,6 +30,8 @@ class FurnitureCategoryClassifier:
     def __init__(self):
         self.client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.max_workers = min(32, (os.cpu_count() or 1) + 4)  # Limit concurrent threads
+        self.embedding_service = EmbeddingService()
+        self.description_service = DescriptionService()
 
     def _classify_single_text_item(self, item: Dict[str, Any], index: int) -> CategoryResult:
         """Classify a single item using text data - synchronous function for threading"""
@@ -87,7 +91,7 @@ class FurnitureCategoryClassifier:
                     json_str = classification_text[json_start:json_end]
                     result_data = json.loads(json_str)
 
-                    return self._create_category_result(result_data, item, index)
+                    return self._create_category_result(result_data, item, index, None)
                 else:
                     return self._create_error_result(item, index, "No JSON found in response")
 
@@ -154,7 +158,7 @@ class FurnitureCategoryClassifier:
                     json_end = classification_text.rfind('}') + 1
                     json_str = classification_text[json_start:json_end]
                     result_data = json.loads(json_str)
-                    return self._create_category_result(result_data, item, index)
+                    return self._create_category_result(result_data, item, index, image_data)
                 else:
                     return self._create_error_result(item, index, "Image analyzed but no JSON response")
             except json.JSONDecodeError:
@@ -334,7 +338,7 @@ class FurnitureCategoryClassifier:
             logger.error(f"Error downloading image {image_url}: {str(e)}")
             return None
 
-    def _create_category_result(self, result_data: Dict[str, Any], original_item: Dict[str, Any], index: int) -> CategoryResult:
+    def _create_category_result(self, result_data: Dict[str, Any], original_item: Dict[str, Any], index: int, image_data: str = None) -> CategoryResult:
         """Create category classification result from parsed data"""
         product_info = self._extract_product_info(original_item)
 
@@ -352,11 +356,27 @@ class FurnitureCategoryClassifier:
             'OTHER'
         )
 
+        # Generate description
+        description = None
+        if image_data:
+            # For image-based classification, generate description from image
+            description = self.description_service.generate_image_description_from_base64(image_data)
+        else:
+            # For text-based classification, generate description from product info
+            description = self.description_service.generate_text_description(product_info)
+
+        # Generate embedding from description
+        embedding = None
+        if description:
+            embedding = self.embedding_service.generate_embedding(description)
+
         return CategoryResult(
             name=product_name,
             predicted_category=predicted_category,
             confidence=float(result_data.get('confidence', 0.5)),
-            reasoning=result_data.get('reasoning', 'Category classification completed')
+            reasoning=result_data.get('reasoning', 'Category classification completed'),
+            description=description,
+            embedding=embedding
         )
 
     def _create_error_result(self, item: Dict[str, Any], index: int, error_msg: str) -> CategoryResult:
@@ -372,5 +392,7 @@ class FurnitureCategoryClassifier:
             name=product_name,
             predicted_category="ERROR",
             confidence=0.0,
-            reasoning=f"Error: {error_msg}"
+            reasoning=f"Error: {error_msg}",
+            description=None,
+            embedding=None
         )

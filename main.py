@@ -5,6 +5,7 @@ import logging
 
 from config import settings
 from api.routers import classification_router, health_router
+from api.routers.fetch_analytics import langsmith_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +38,7 @@ app.add_middleware(
 # Include routers
 app.include_router(classification_router)
 app.include_router(health_router)
+app.include_router(langsmith_router)
 
 if __name__ == "__main__":
     import uvicorn
